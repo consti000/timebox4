@@ -26,7 +26,7 @@ const TIME_SLOTS = generateTimeSlots(5, 24);
 let currentDate = todayISO();
 let dayData = createEmptyDayData();
 let isSaving = false;
-let isCalendarBusy = false;
+let calendarAction = null; // 'pull' | 'push' | null
 
 const els = {};
 
@@ -80,7 +80,7 @@ function requireGoogleReady(actionLabel) {
     showToast(`먼저 Google 로그인 후 ${actionLabel}하세요.`, 'error');
     return false;
   }
-  if (isSaving || isCalendarBusy) {
+  if (isSaving || calendarAction) {
     showToast('다른 작업이 진행 중입니다. 완료될 때까지 기다려 주세요.');
     return false;
   }
@@ -92,7 +92,7 @@ async function syncToGoogle() {
     return { ok: false, reason: 'unauthenticated' };
   }
 
-  if (isSaving || isCalendarBusy) {
+  if (isSaving || calendarAction) {
     return { ok: false, reason: 'busy' };
   }
 
@@ -101,6 +101,8 @@ async function syncToGoogle() {
   setSaveIndicator('saving', 'Google Docs 저장 중...');
 
   try {
+    debouncedPersist.cancel?.();
+    persistLocal();
     const result = await saveToGoogleDocs(currentDate, dayData);
     setSaveIndicator('synced', 'Google Docs 저장됨');
     els.syncStatus.hidden = false;
@@ -140,20 +142,31 @@ async function pullFromCalendar() {
     return { ok: false, reason: 'blocked' };
   }
 
-  isCalendarBusy = true;
+  calendarAction = 'pull';
   updateGoogleButton();
   setSaveIndicator('saving', '캘린더 불러오는 중...');
 
   try {
-    const result = await pullDayToTimeline(currentDate, dayData.timeline);
-    dayData.timeline = result.timeline;
+    const snapshot = { ...dayData.timeline };
+    const result = await pullDayToTimeline(currentDate, snapshot);
+    // 요청 중 로컬에서 입력한 내용은 유지하고, 빈 슬롯만 캘린더 값으로 채움
+    const merged = { ...result.timeline };
+    for (const [slot, text] of Object.entries(dayData.timeline)) {
+      if (text?.trim()) {
+        merged[slot] = text;
+      }
+    }
+    const filled = Object.keys(merged).filter(
+      (slot) => merged[slot]?.trim() && !snapshot[slot]?.trim()
+    ).length;
+    dayData.timeline = merged;
     persistLocal();
     renderTimeline();
     setSaveIndicator('synced', '캘린더 불러옴');
     els.syncStatus.hidden = false;
     els.syncStatus.className = 'sync-status success';
-    els.syncStatus.textContent = `✅ 빈 슬롯 ${result.filled}개에 캘린더 일정을 반영했습니다.`;
-    return { ok: true, ...result };
+    els.syncStatus.textContent = `✅ 빈 슬롯 ${filled}개에 캘린더 일정을 반영했습니다.`;
+    return { ok: true, timeline: merged, filled, eventCount: result.eventCount };
   } catch (err) {
     if (isAuthExpiredError(err)) {
       handleAuthExpired();
@@ -165,7 +178,7 @@ async function pullFromCalendar() {
     els.syncStatus.textContent = `❌ ${err.message}`;
     return { ok: false, reason: 'error', message: err.message };
   } finally {
-    isCalendarBusy = false;
+    calendarAction = null;
     updateGoogleButton();
   }
 }
@@ -175,11 +188,13 @@ async function pushToCalendar() {
     return { ok: false, reason: 'blocked' };
   }
 
-  isCalendarBusy = true;
+  calendarAction = 'push';
   updateGoogleButton();
   setSaveIndicator('saving', '캘린더로 보내는 중...');
 
   try {
+    debouncedPersist.cancel?.();
+    persistLocal();
     const result = await pushTimelineToCalendar(currentDate, dayData.timeline);
     setSaveIndicator('synced', '캘린더 반영됨');
     els.syncStatus.hidden = false;
@@ -206,7 +221,7 @@ async function pushToCalendar() {
     els.syncStatus.textContent = `❌ ${err.message}`;
     return { ok: false, reason: 'error', message: err.message };
   } finally {
-    isCalendarBusy = false;
+    calendarAction = null;
     updateGoogleButton();
   }
 }
@@ -214,6 +229,7 @@ async function pushToCalendar() {
 function switchDate(newDateISO) {
   if (!newDateISO) return false;
 
+  debouncedPersist.cancel?.();
   saveDayData(currentDate, dayData);
   currentDate = newDateISO;
   dayData = loadDayData(currentDate);
@@ -339,7 +355,7 @@ function renderAll() {
 function updateGoogleButton() {
   els.manualSaveBtn.hidden = false;
 
-  const busy = isSaving || isCalendarBusy;
+  const busy = isSaving || Boolean(calendarAction);
 
   if (!isGoogleConfigured()) {
     els.googleAuthBtn.textContent = 'Google 로그인';
@@ -356,8 +372,10 @@ function updateGoogleButton() {
   els.manualSaveBtn.textContent = isSaving ? '저장 중...' : '구글 닥스에 저장';
   els.calendarPullBtn.disabled = busy;
   els.calendarPushBtn.disabled = busy;
-  els.calendarPullBtn.textContent = isCalendarBusy ? '불러오는 중...' : '캘린더 불러오기';
-  els.calendarPushBtn.textContent = isCalendarBusy ? '보내는 중...' : '캘린더 보내기';
+  els.calendarPullBtn.textContent =
+    calendarAction === 'pull' ? '불러오는 중...' : '캘린더 불러오기';
+  els.calendarPushBtn.textContent =
+    calendarAction === 'push' ? '보내는 중...' : '캘린더 보내기';
 
   if (isAuthenticated()) {
     els.googleAuthBtn.textContent = 'Google 로그아웃';

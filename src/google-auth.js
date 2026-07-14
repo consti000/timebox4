@@ -116,13 +116,17 @@ export async function apiFetch(url, options = {}, retryCount = 0) {
     throw createAuthExpiredError();
   }
 
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    ...options.headers,
+  };
+  if (options.body != null && headers['Content-Type'] == null) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   const res = await fetch(url, {
     ...options,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
   });
 
   if (!res.ok) {

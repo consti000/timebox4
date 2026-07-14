@@ -80,6 +80,11 @@ function slotsCoveredByRange(dateISO, start, end) {
   return slots;
 }
 
+function calendarDayUrl(dateISO) {
+  const { y, m, d } = parseDateParts(dateISO);
+  return `https://calendar.google.com/calendar/r/day/${y}/${m}/${d}`;
+}
+
 export function mergeTimelineToBlocks(dateISO, timeline) {
   const blocks = [];
   let i = 0;
@@ -113,17 +118,20 @@ export function mergeTimelineToBlocks(dateISO, timeline) {
 }
 
 async function listDayEvents(dateISO, { ownedOnly = false } = {}) {
-  const { timeMin, timeMax } = dayRange(dateISO);
   const params = new URLSearchParams({
-    timeMin,
-    timeMax,
     singleEvents: 'true',
     orderBy: 'startTime',
     maxResults: '2500',
   });
 
   if (ownedOnly) {
+    // timeboxDate로 조회해 24:00 슬롯(다음날 00:00) 이벤트도 빠지지 않게 함
     params.append('privateExtendedProperty', `timeboxOrigin=${TIMEBOX_ORIGIN}`);
+    params.append('privateExtendedProperty', `timeboxDate=${dateISO}`);
+  } else {
+    const { timeMin, timeMax } = dayRange(dateISO);
+    params.set('timeMin', timeMin);
+    params.set('timeMax', timeMax);
   }
 
   const data = await apiFetch(
@@ -191,7 +199,7 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
 
   const blocks = mergeTimelineToBlocks(dateISO, timeline);
   const existing = await listDayEvents(dateISO, { ownedOnly: true });
-  const unused = new Set(existing.map((event) => event.id));
+  const unused = new Set(existing.map((event) => event.id).filter(Boolean));
 
   const byRange = new Map();
   for (const event of existing) {
@@ -251,6 +259,6 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
     deleted,
     unchanged,
     total: blocks.length,
-    calendarUrl: `https://calendar.google.com/calendar/r/day/${dateISO.replaceAll('-', '/')}`,
+    calendarUrl: calendarDayUrl(dateISO),
   };
 }
