@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f5f5f0" />
+    <meta name="description" content="TimeBox4 - 일일 계획, 타임박싱, Google Calendar 연동" />
+    <title>TimeBox4</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="header">
+        <div>
+          <h1 class="title">Timebox4</h1>
+          <p class="subtitle">하루를 시간 단위로 계획하고 Google Calendar와 동기화하세요.</p>
+        </div>
+        <div class="header-actions">
+          <button type="button" id="google-auth-btn" class="btn btn-ghost">Google 로그인</button>
+          <button type="button" id="manual-save-btn" class="btn btn-primary">구글 닥스에 저장</button>
+          <button type="button" id="calendar-pull-btn" class="btn btn-ghost">캘린더 불러오기</button>
+          <button type="button" id="calendar-push-btn" class="btn btn-ghost">캘린더 보내기</button>
+          <button type="button" id="excel-export-btn" class="btn btn-ghost">엑셀</button>
+        </div>
+      </header>
+
+      <section class="date-card card">
+        <div class="date-row">
+          <label for="date-input" class="date-label"><span class="title-icon" aria-hidden="true">◷</span>날짜</label>
+          <input type="date" id="date-input" class="date-input" autocomplete="off" />
+        </div>
+      </section>
+
+      <main class="main-grid">
+        <div class="left-column">
+          <section class="card priorities-card">
+            <h2 class="card-title"><span class="title-icon" aria-hidden="true">◎</span>Top 3 우선순위</h2>
+            <ul id="priorities-list" class="priorities-list"></ul>
+          </section>
+
+          <section class="card brain-dump-card">
+            <h2 class="card-title"><span class="title-icon" aria-hidden="true">☑</span>할 일 목록</h2>
+            <form id="brain-dump-form" class="brain-dump-form">
+              <input type="text" id="brain-dump-input" class="text-input" placeholder="할 일 추가" autocomplete="off" />
+              <button type="submit" class="btn btn-ghost">추가</button>
+            </form>
+            <ul id="brain-dump-list" class="check-list"></ul>
+            <p id="empty-todo" class="empty-state">아직 할 일이 없습니다.</p>
+          </section>
+
+          <section class="card memo-card">
+            <h2 class="card-title">Brain Dump</h2>
+            <textarea id="memo-input" class="memo-textarea" placeholder="생각나는 내용을 빠르게 기록하세요."></textarea>
+          </section>
+        </div>
+
+        <section class="card timeline-card">
+          <div class="card-header-row">
+            <h2 class="card-title"><span class="title-icon" aria-hidden="true">◔</span>타임박스 (05:00 - 24:00)</h2>
+            <button type="button" id="timeline-reset-btn" class="btn btn-text">초기화</button>
+          </div>
+          <div id="timeline-grid" class="timeline-grid"></div>
+          <div id="sync-status" class="sync-status" hidden></div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span id="save-indicator" class="save-indicator">로컬 저장됨</span>
+      </footer>
+    </div>
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
