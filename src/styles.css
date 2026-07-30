@@ -69,6 +69,39 @@ body {
   justify-content: flex-end;
 }
 
+.google-setup-notice {
+  margin-bottom: 0.9rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #fcd34d;
+  border-radius: var(--radius-sm);
+  background: #fffbeb;
+  color: #78350f;
+  font-size: 0.88rem;
+}
+
+.google-setup-title {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.google-setup-hint {
+  margin-bottom: 0.45rem;
+}
+
+.google-setup-steps {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.google-setup-steps code {
+  font-size: 0.84rem;
+  background: rgba(255, 255, 255, 0.65);
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+}
+
 .card {
   background: var(--card-bg);
   border-radius: var(--radius);

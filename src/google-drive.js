@@ -8,6 +8,7 @@ import {
 
 export {
   isGoogleConfigured,
+  getGoogleSetupHint,
   isAuthenticated,
   isAuthExpiredError,
   isQuotaError,
@@ -17,8 +18,8 @@ export {
 } from './google-auth.js';
 
 const FOLDER_NAME = 'TimeBox4 Planner';
-const MASTER_DOC_NAME = 'TimeBox4 Planner Journal';
-const MASTER_DOC_ID_KEY = 'timebox4_master_doc_id';
+const MASTER_DOC_NAME = 'Timebox Planner Journal(v2)';
+const MASTER_DOC_ID_KEY = 'timebox4_master_doc_id_v2';
 const SECTION_START_PREFIX = '[[TIMEBOX_START:';
 const SECTION_END_PREFIX = '[[TIMEBOX_END:';
 const TIME_SLOTS = generateTimeSlots(5, 24);

@@ -7,13 +7,41 @@ const SCOPES = [
 const AUTH_EXPIRED = 'AUTH_EXPIRED';
 const QUOTA_RETRY_DELAY_MS = 45000;
 const QUOTA_MAX_RETRIES = 2;
+const PLACEHOLDER_CLIENT_ID = 'your-client-id.apps.googleusercontent.com';
 
 let accessToken = null;
 let tokenClient = null;
 const signOutListeners = new Set();
 
+export function getGoogleClientId() {
+  const raw = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  if (typeof raw !== 'string') return '';
+  return raw.trim();
+}
+
 export function isGoogleConfigured() {
-  return Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
+  const clientId = getGoogleClientId();
+  if (!clientId) return false;
+  if (
+    clientId === PLACEHOLDER_CLIENT_ID ||
+    clientId.includes('your-client-id')
+  ) {
+    return false;
+  }
+  return clientId.endsWith('.apps.googleusercontent.com');
+}
+
+export function getGoogleSetupHint() {
+  if (isGoogleConfigured()) return '';
+
+  const clientId = getGoogleClientId();
+  if (!clientId) {
+    return '프로젝트 루트에 .env 파일을 만들고 VITE_GOOGLE_CLIENT_ID를 설정하세요. (.env.example 참고)';
+  }
+  if (clientId.includes('your-client-id')) {
+    return '.env의 VITE_GOOGLE_CLIENT_ID에 실제 OAuth Client ID를 넣고 npm run dev를 재시작하세요.';
+  }
+  return 'VITE_GOOGLE_CLIENT_ID 형식을 확인하세요. (xxxx.apps.googleusercontent.com)';
 }
 
 export function isAuthenticated() {
@@ -40,9 +68,9 @@ export function onSignOut(listener) {
 }
 
 export function initGoogleAuth(onSuccess, onError) {
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-  if (!clientId) {
-    onError?.('Google Client ID가 설정되지 않았습니다. .env 파일을 확인하세요.');
+  const clientId = getGoogleClientId();
+  if (!isGoogleConfigured()) {
+    onError?.(getGoogleSetupHint());
     return;
   }
 

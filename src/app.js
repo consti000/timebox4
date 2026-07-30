@@ -10,6 +10,7 @@ import {
 } from './utils.js';
 import {
   isGoogleConfigured,
+  getGoogleSetupHint,
   isAuthenticated,
   isAuthExpiredError,
   isQuotaError,
@@ -77,7 +78,8 @@ function handleAuthExpired() {
 
 function requireGoogleReady(actionLabel) {
   if (!isGoogleConfigured()) {
-    showToast('.env 파일에 VITE_GOOGLE_CLIENT_ID를 설정하세요.', 'error');
+    renderGoogleSetupNotice();
+    showToast(getGoogleSetupHint(), 'error');
     return false;
   }
   if (!isAuthenticated()) {
@@ -395,14 +397,27 @@ function renderAll() {
   renderMemo();
 }
 
+function renderGoogleSetupNotice() {
+  if (!els.googleSetupNotice) return;
+
+  if (!isGoogleConfigured()) {
+    els.googleSetupNotice.hidden = false;
+    els.googleSetupHint.textContent = getGoogleSetupHint();
+  } else {
+    els.googleSetupNotice.hidden = true;
+  }
+}
+
 function updateGoogleButton() {
   els.manualSaveBtn.hidden = false;
+  renderGoogleSetupNotice();
 
   const busy = isSaving || Boolean(calendarAction);
 
   if (!isGoogleConfigured()) {
     els.googleAuthBtn.textContent = 'Google 로그인';
-    els.googleAuthBtn.disabled = true;
+    els.googleAuthBtn.disabled = busy;
+    els.googleAuthBtn.classList.remove('connected');
     els.manualSaveBtn.disabled = true;
     els.manualSaveBtn.textContent = '구글 닥스에 저장';
     els.calendarPullBtn.disabled = true;
@@ -509,7 +524,9 @@ function bindEvents() {
 
   els.googleAuthBtn.addEventListener('click', async () => {
     if (!isGoogleConfigured()) {
-      showToast('.env 파일에 VITE_GOOGLE_CLIENT_ID를 설정하세요.', 'error');
+      renderGoogleSetupNotice();
+      els.googleSetupNotice?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      showToast(getGoogleSetupHint(), 'error');
       return;
     }
 
@@ -590,6 +607,8 @@ export function initApp() {
   els.timelineResetBtn = $('timeline-reset-btn');
   els.memoInput = $('memo-input');
   els.googleAuthBtn = $('google-auth-btn');
+  els.googleSetupNotice = $('google-setup-notice');
+  els.googleSetupHint = $('google-setup-hint');
   els.syncStatus = $('sync-status');
   els.saveIndicator = $('save-indicator');
   els.manualSaveBtn = $('manual-save-btn');
@@ -608,11 +627,8 @@ export function initApp() {
   if (!isGoogleConfigured()) {
     els.syncStatus.hidden = false;
     els.syncStatus.className = 'sync-status';
-    els.syncStatus.textContent =
-      'VITE_GOOGLE_CLIENT_ID를 .env에 설정하면 Google Docs·Calendar 연동을 사용할 수 있습니다.';
-    showToast(
-      'VITE_GOOGLE_CLIENT_ID를 .env에 설정하면 Google Docs·Calendar 연동을 사용할 수 있습니다.'
-    );
+    els.syncStatus.textContent = getGoogleSetupHint();
+    showToast(getGoogleSetupHint());
   } else {
     initGoogleAuth(
       () => {
