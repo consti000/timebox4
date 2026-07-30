@@ -9,6 +9,7 @@ import {
 export {
   isGoogleConfigured,
   getGoogleSetupHint,
+  getGoogleSetupSteps,
   isAuthenticated,
   isAuthExpiredError,
   isQuotaError,

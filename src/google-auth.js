@@ -31,10 +31,21 @@ export function isGoogleConfigured() {
   return clientId.endsWith('.apps.googleusercontent.com');
 }
 
+export function isProductionDeploy() {
+  return Boolean(import.meta.env.PROD);
+}
+
 export function getGoogleSetupHint() {
   if (isGoogleConfigured()) return '';
 
   const clientId = getGoogleClientId();
+  if (isProductionDeploy()) {
+    if (!clientId || clientId.includes('your-client-id')) {
+      return 'GitHub 저장소 Secrets에 VITE_GOOGLE_CLIENT_ID를 추가한 뒤 다시 배포하세요.';
+    }
+    return 'VITE_GOOGLE_CLIENT_ID 형식을 확인하세요. (xxxx.apps.googleusercontent.com)';
+  }
+
   if (!clientId) {
     return '프로젝트 루트에 .env 파일을 만들고 VITE_GOOGLE_CLIENT_ID를 설정하세요. (.env.example 참고)';
   }
@@ -42,6 +53,24 @@ export function getGoogleSetupHint() {
     return '.env의 VITE_GOOGLE_CLIENT_ID에 실제 OAuth Client ID를 넣고 npm run dev를 재시작하세요.';
   }
   return 'VITE_GOOGLE_CLIENT_ID 형식을 확인하세요. (xxxx.apps.googleusercontent.com)';
+}
+
+export function getGoogleSetupSteps() {
+  if (isProductionDeploy()) {
+    return [
+      'GitHub 저장소 Settings → Secrets and variables → Actions에서 VITE_GOOGLE_CLIENT_ID를 추가합니다.',
+      'Google Cloud Console에서 OAuth 웹 클라이언트 ID를 발급합니다.',
+      '승인된 JavaScript 원본에 https://consti000.github.io 를 추가합니다.',
+      'Secrets 저장 후 Actions에서 Deploy to GitHub Pages를 다시 실행합니다.',
+    ];
+  }
+
+  return [
+    '.env.example을 복사해 프로젝트 루트에 .env를 만듭니다.',
+    'Google Cloud Console에서 OAuth 웹 클라이언트 ID를 발급합니다.',
+    '승인된 JavaScript 원본에 http://localhost:5173 을 추가합니다.',
+    'VITE_GOOGLE_CLIENT_ID에 Client ID를 넣고 npm run dev를 재시작합니다.',
+  ];
 }
 
 export function isAuthenticated() {

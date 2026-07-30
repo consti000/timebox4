@@ -11,6 +11,7 @@ import {
 import {
   isGoogleConfigured,
   getGoogleSetupHint,
+  getGoogleSetupSteps,
   isAuthenticated,
   isAuthExpiredError,
   isQuotaError,
@@ -403,6 +404,14 @@ function renderGoogleSetupNotice() {
   if (!isGoogleConfigured()) {
     els.googleSetupNotice.hidden = false;
     els.googleSetupHint.textContent = getGoogleSetupHint();
+    if (els.googleSetupSteps) {
+      els.googleSetupSteps.replaceChildren();
+      getGoogleSetupSteps().forEach((step) => {
+        const li = document.createElement('li');
+        li.textContent = step;
+        els.googleSetupSteps.appendChild(li);
+      });
+    }
   } else {
     els.googleSetupNotice.hidden = true;
   }
@@ -609,6 +618,7 @@ export function initApp() {
   els.googleAuthBtn = $('google-auth-btn');
   els.googleSetupNotice = $('google-setup-notice');
   els.googleSetupHint = $('google-setup-hint');
+  els.googleSetupSteps = $('google-setup-steps');
   els.syncStatus = $('sync-status');
   els.saveIndicator = $('save-indicator');
   els.manualSaveBtn = $('manual-save-btn');
