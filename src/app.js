@@ -1,5 +1,7 @@
 import {
   todayISO,
+  formatDateDisplay,
+  dateWindowAround,
   generateTimeSlots,
   createEmptyDayData,
   loadDayData,
@@ -22,6 +24,8 @@ import {
 } from './google-calendar.js';
 
 const TIME_SLOTS = generateTimeSlots(5, 24);
+const DATE_STRIP_RADIUS = 4;
+const WEEKDAY_SHORT = ['일', '월', '화', '수', '목', '금', '토'];
 
 let currentDate = todayISO();
 let dayData = createEmptyDayData();
@@ -345,7 +349,46 @@ function renderMemo() {
   els.memoInput.value = dayData.memo;
 }
 
+function parseLocalDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function renderDateStrip() {
+  const today = todayISO();
+  const dates = dateWindowAround(today, DATE_STRIP_RADIUS);
+
+  els.dateStrip.replaceChildren();
+
+  dates.forEach((iso) => {
+    const date = parseLocalDate(iso);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'date-chip';
+    if (iso === today) btn.classList.add('is-today');
+    if (iso === currentDate) btn.classList.add('is-selected');
+    btn.setAttribute('aria-label', formatDateDisplay(iso));
+    if (iso === currentDate) btn.setAttribute('aria-current', 'date');
+
+    const weekday = document.createElement('span');
+    weekday.className = 'date-chip-weekday';
+    weekday.textContent = WEEKDAY_SHORT[date.getDay()];
+
+    const day = document.createElement('span');
+    day.className = 'date-chip-day';
+    day.textContent = String(date.getDate());
+
+    btn.append(weekday, day);
+    btn.addEventListener('click', () => {
+      if (iso !== currentDate) switchDate(iso);
+    });
+
+    els.dateStrip.appendChild(btn);
+  });
+}
+
 function renderAll() {
+  renderDateStrip();
   renderPriorities();
   renderBrainDump();
   renderTimeline();
@@ -537,6 +580,7 @@ function bindEvents() {
 
 export function initApp() {
   els.dateInput = $('date-input');
+  els.dateStrip = $('date-strip');
   els.prioritiesList = $('priorities-list');
   els.brainDumpForm = $('brain-dump-form');
   els.brainDumpInput = $('brain-dump-input');
