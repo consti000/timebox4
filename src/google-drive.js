@@ -19,16 +19,14 @@ export {
 } from './google-auth.js';
 
 const FOLDER_NAME = 'TimeBox4 Planner';
-const MASTER_DOC_NAME = 'Timebox Planner Journal(v2)';
-const MASTER_DOC_ID_KEY = 'timebox4_master_doc_id_v2';
+/** 손상된 v2와 분리된 새 통합 문서 */
+const MASTER_DOC_NAME = 'Timebox Planner Journal(v3)';
+const MASTER_DOC_ID_KEY = 'timebox4_master_doc_id_v3';
 const SECTION_START_PREFIX = '[[TIMEBOX_START:';
 const SECTION_END_PREFIX = '[[TIMEBOX_END:';
 const TIME_SLOTS = generateTimeSlots(5, 24);
-const TABLE_HEADER_BG = { red: 0.93, green: 0.94, blue: 0.96 };
 const TITLE_BRAND_PREFIX = 'Timebox4';
 const TITLE_BRAND_FONT = 'Times New Roman';
-const TABLE_CONTENT_WIDTH_PT = 450;
-const TWO_COLUMN_WIDTH_RATIO = [2, 8];
 
 let folderId = null;
 let masterDocId = null;
@@ -170,160 +168,12 @@ function sectionEndMarker(dateISO) {
   return `${SECTION_END_PREFIX}${dateISO}]]`;
 }
 
-function getParagraphText(block) {
-  if (!block?.paragraph?.elements) return '';
-  return block.paragraph.elements
-    .map((el) => el.textRun?.content || '')
-    .join('');
-}
-
 function getDocEndIndex(doc) {
   return doc.body?.content?.at(-1)?.endIndex ?? 1;
 }
 
 function getInsertIndex(doc) {
   return Math.max(1, getDocEndIndex(doc) - 1);
-}
-
-function isSectionStartParagraph(text) {
-  const trimmed = text.trim();
-  return trimmed.startsWith(SECTION_START_PREFIX) && trimmed.endsWith(']]');
-}
-
-function findAllDateSectionRanges(doc, dateISO) {
-  const targetStart = sectionStartMarker(dateISO);
-  const targetEnd = sectionEndMarker(dateISO);
-  const content = doc.body?.content || [];
-  const paragraphs = [];
-
-  for (const block of content) {
-    if (!block.paragraph) continue;
-    paragraphs.push({
-      startIndex: block.startIndex,
-      endIndex: block.endIndex,
-      text: getParagraphText(block).trim(),
-    });
-  }
-
-  const ranges = [];
-
-  for (let i = 0; i < paragraphs.length; i += 1) {
-    if (paragraphs[i].text !== targetStart) continue;
-
-    const startIndex = paragraphs[i].startIndex;
-    let endIndex = null;
-
-    for (let j = i + 1; j < paragraphs.length; j += 1) {
-      const text = paragraphs[j].text;
-      if (text === targetEnd) {
-        endIndex = paragraphs[j].endIndex;
-        break;
-      }
-      if (isSectionStartParagraph(text)) {
-        endIndex = paragraphs[j].startIndex;
-        break;
-      }
-    }
-
-    if (endIndex == null) {
-      endIndex = getDocEndIndex(doc) - 1;
-    }
-
-    if (endIndex > startIndex) {
-      ranges.push({ startIndex, endIndex });
-    }
-  }
-
-  return ranges;
-}
-
-async function deleteAllDateSections(docId, ranges) {
-  if (!ranges.length) return;
-
-  const sorted = [...ranges].sort((a, b) => b.startIndex - a.startIndex);
-  const requests = sorted.map((range) => ({
-    deleteContentRange: { range },
-  }));
-
-  await batchUpdate(docId, requests);
-}
-
-function findLastTable(doc) {
-  const tables = (doc.body?.content || []).filter((block) => block.table);
-  return tables.at(-1) ?? null;
-}
-
-function getTableCellStartIndices(tableBlock) {
-  const indices = [];
-  const rows = tableBlock.table?.tableRows || [];
-
-  for (const row of rows) {
-    for (const cell of row.tableCells || []) {
-      const block = cell.content?.[0];
-      if (block?.startIndex != null) {
-        indices.push(block.startIndex);
-      }
-    }
-  }
-
-  return indices;
-}
-
-function buildSectionPlan(dateISO, data) {
-  const [y, m, d] = dateISO.split('-');
-  const title = `Timebox4 — ${y}년 ${parseInt(m, 10)}월 ${parseInt(d, 10)}일`;
-
-  const priorities = Array.isArray(data.priorities) ? data.priorities : [];
-  const priorityRows = [
-    ['우선순위', '내용'],
-    ['1', priorities[0]?.text || ''],
-    ['2', priorities[1]?.text || ''],
-    ['3', priorities[2]?.text || ''],
-  ];
-
-  const todoRows = [['상태', '할 일']];
-  if (!Array.isArray(data.brainDump) || data.brainDump.length === 0) {
-    todoRows.push(['—', '아직 할 일이 없습니다.']);
-  } else {
-    data.brainDump.forEach((item) => {
-      todoRows.push([item.done ? '완료' : '미완료', item.text || '']);
-    });
-  }
-
-  const timelineRows = [['시간', '계획']];
-  TIME_SLOTS.forEach((time) => {
-    timelineRows.push([time, data.timeline?.[time]?.trim() || '']);
-  });
-
-  const memoText = data.memo?.trim() || '(메모 없음)';
-
-  return {
-    startMarker: sectionStartMarker(dateISO),
-    endMarker: sectionEndMarker(dateISO),
-    title,
-    footer: `마지막 저장: ${new Date().toLocaleString('ko-KR')}`,
-    sections: [
-      {
-        type: 'table',
-        title: 'Top 3 우선순위',
-        rows: priorityRows,
-        columnWidthRatio: TWO_COLUMN_WIDTH_RATIO,
-      },
-      {
-        type: 'table',
-        title: '할 일 목록',
-        rows: todoRows,
-        columnWidthRatio: TWO_COLUMN_WIDTH_RATIO,
-      },
-      {
-        type: 'table',
-        title: '타임박스 (05:00 - 24:00)',
-        rows: timelineRows,
-        columnWidthRatio: TWO_COLUMN_WIDTH_RATIO,
-      },
-      { type: 'table', title: 'Brain Dump', rows: [[memoText]] },
-    ],
-  };
 }
 
 async function getDocument(docId) {
@@ -338,95 +188,51 @@ async function batchUpdate(docId, requests) {
   });
 }
 
-function buildTablePopulateRequests(rows, cellIndices) {
-  const inserts = [];
-  let flatIndex = 0;
-
-  for (const row of rows) {
-    for (const cell of row) {
-      const text = String(cell ?? '');
-      const cellIndex = cellIndices[flatIndex];
-      if (text && cellIndex != null) {
-        inserts.push({ cellIndex, text });
-      }
-      flatIndex += 1;
-    }
-  }
-
-  inserts.sort((a, b) => b.cellIndex - a.cellIndex);
-  return inserts.map(({ cellIndex, text }) => ({
-    insertText: {
-      location: { index: cellIndex },
-      text,
-    },
-  }));
+function documentHasTimeboxMarkers(doc) {
+  const raw = JSON.stringify(doc.body || {});
+  return (
+    raw.includes(SECTION_START_PREFIX) || raw.includes(SECTION_END_PREFIX)
+  );
 }
 
-function buildTableHeaderStyleRequests(tableStartIndex, rows, cellIndices, columnCount) {
-  if (rows.length <= 1) return [];
+/**
+ * 마커 탐색에 의존하지 않고 본문 전체를 비웁니다.
+ * (표 안에 마커가 숨어도 삭제되도록 index 1부터 지움)
+ */
+async function clearDocumentBody(docId) {
+  const doc = await getDocument(docId);
+  const endIndex = getDocEndIndex(doc);
+  if (endIndex <= 2) return;
 
-  const requests = [];
-
-  for (let col = 0; col < columnCount; col += 1) {
-    requests.push({
-      updateTableCellStyle: {
-        tableRange: {
-          tableCellLocation: {
-            tableStartLocation: { index: tableStartIndex },
-            rowIndex: 0,
-            columnIndex: col,
-          },
-          rowSpan: 1,
-          columnSpan: 1,
-        },
-        tableCellStyle: {
-          backgroundColor: { color: { rgbColor: TABLE_HEADER_BG } },
-        },
-        fields: 'backgroundColor',
-      },
-    });
-  }
-
-  for (let col = 0; col < columnCount; col += 1) {
-    const cellIndex = cellIndices[col];
-    const text = String(rows[0][col] ?? '');
-    if (!text || cellIndex == null) continue;
-
-    requests.push({
-      updateTextStyle: {
+  await batchUpdate(docId, [
+    {
+      deleteContentRange: {
         range: {
-          startIndex: cellIndex,
-          endIndex: cellIndex + text.length,
+          startIndex: 1,
+          endIndex: endIndex - 1,
         },
-        textStyle: { bold: true },
-        fields: 'bold',
       },
-    });
+    },
+  ]);
+
+  const after = await getDocument(docId);
+  const afterEnd = getDocEndIndex(after);
+  if (afterEnd > 2) {
+    await batchUpdate(docId, [
+      {
+        deleteContentRange: {
+          range: { startIndex: 1, endIndex: afterEnd - 1 },
+        },
+      },
+    ]);
   }
 
-  return requests;
-}
-
-function getColumnWidthsPt(ratio) {
-  const total = ratio.reduce((sum, part) => sum + part, 0);
-  return ratio.map((part) => ({
-    magnitude: (TABLE_CONTENT_WIDTH_PT * part) / total,
-    unit: 'PT',
-  }));
-}
-
-function buildTableColumnWidthRequests(tableStartIndex, widthsPt) {
-  return widthsPt.map((width, columnIndex) => ({
-    updateTableColumnProperties: {
-      tableStartLocation: { index: tableStartIndex },
-      columnIndices: [columnIndex],
-      tableColumnProperties: {
-        widthType: 'FIXED_WIDTH',
-        width,
-      },
-      fields: 'width,widthType',
-    },
-  }));
+  const verified = await getDocument(docId);
+  if (documentHasTimeboxMarkers(verified)) {
+    throw new Error(
+      '문서 초기화에 실패했습니다. Drive에서 Journal(v3) 문서를 삭제한 뒤 다시 저장해 주세요.'
+    );
+  }
 }
 
 function buildTitleBrandStyleRequest(titleStart) {
@@ -446,98 +252,78 @@ function buildTitleBrandStyleRequest(titleStart) {
   };
 }
 
-async function insertTableSection(docId, insertIndex, rows, columnWidthRatio) {
-  const rowCount = rows.length;
-  const columnCount = rows[0]?.length ?? 1;
+function buildSectionPlainText(dateISO, data) {
+  const [y, m, d] = dateISO.split('-');
+  const title = `Timebox4 — ${y}년 ${parseInt(m, 10)}월 ${parseInt(d, 10)}일`;
+  const startMarker = sectionStartMarker(dateISO);
+  const endMarker = sectionEndMarker(dateISO);
+  const footer = `마지막 저장: ${new Date().toLocaleString('ko-KR')}`;
 
-  await batchUpdate(docId, [
-    {
-      insertTable: {
-        rows: rowCount,
-        columns: columnCount,
-        location: { index: insertIndex },
-      },
-    },
-  ]);
+  const priorities = Array.isArray(data.priorities) ? data.priorities : [];
+  const priorityLines = [1, 2, 3]
+    .map((n) => `${n}. ${priorities[n - 1]?.text?.trim() || '(없음)'}`)
+    .join('\n');
 
-  const doc = await getDocument(docId);
-  const tableBlock = findLastTable(doc);
-  if (!tableBlock) {
-    throw new Error('표 생성 후 문서에서 표를 찾지 못했습니다.');
+  let todoLines;
+  if (!Array.isArray(data.brainDump) || data.brainDump.length === 0) {
+    todoLines = '- 아직 할 일이 없습니다.';
+  } else {
+    todoLines = data.brainDump
+      .map((item) => `${item.done ? '[x]' : '[ ]'} ${item.text || ''}`)
+      .join('\n');
   }
 
-  const cellIndices = getTableCellStartIndices(tableBlock);
-  const expectedCells = rowCount * columnCount;
-  if (cellIndices.length < expectedCells) {
-    throw new Error(
-      `표 셀을 읽지 못했습니다. (${cellIndices.length}/${expectedCells})`
-    );
-  }
+  const timelineLines = TIME_SLOTS.map((time) => {
+    const plan = data.timeline?.[time]?.trim() || '';
+    return plan ? `${time}  ${plan}` : `${time}`;
+  }).join('\n');
 
-  const tableStartIndex = tableBlock.startIndex;
-  const populateRequests = buildTablePopulateRequests(rows, cellIndices);
+  const memoText = data.memo?.trim() || '(메모 없음)';
 
-  if (populateRequests.length) {
-    await batchUpdate(docId, populateRequests);
-  }
+  const body = [
+    startMarker,
+    title,
+    '',
+    '■ Top 3 우선순위',
+    priorityLines,
+    '',
+    '■ 할 일 목록',
+    todoLines,
+    '',
+    '■ 타임박스 (05:00 - 24:00)',
+    timelineLines,
+    '',
+    '■ Brain Dump',
+    memoText,
+    '',
+    footer,
+    endMarker,
+    '',
+    '',
+  ].join('\n');
 
-  if (rows.length > 1) {
-    const styleRequests = buildTableHeaderStyleRequests(
-      tableStartIndex,
-      rows,
-      cellIndices,
-      columnCount
-    );
-    await batchUpdate(docId, styleRequests);
-  }
-
-  if (columnWidthRatio?.length === columnCount && columnCount > 1) {
-    const widthRequests = buildTableColumnWidthRequests(
-      tableStartIndex,
-      getColumnWidthsPt(columnWidthRatio)
-    );
-    await batchUpdate(docId, widthRequests);
-  }
+  return { text: body, title, startMarker };
 }
 
-async function upsertDateSection(docId, dateISO, data) {
-  const plan = buildSectionPlan(dateISO, data);
-  let doc = await getDocument(docId);
-  const existingRanges = findAllDateSectionRanges(doc, dateISO);
-  let insertIndex;
+/** 문서 끝에 날짜 섹션 한 개를 텍스트로 append합니다. */
+async function appendDateSection(docId, dateISO, data) {
+  const { text, title, startMarker } = buildSectionPlainText(dateISO, data);
+  const doc = await getDocument(docId);
+  const insertIndex = getInsertIndex(doc);
+  const titleStart = insertIndex + startMarker.length + 1;
 
-  if (existingRanges.length > 0) {
-    insertIndex = Math.min(...existingRanges.map((range) => range.startIndex));
-    await deleteAllDateSections(docId, existingRanges);
-  } else {
-    insertIndex = getInsertIndex(doc);
-    if (insertIndex > 1) {
-      await batchUpdate(docId, [
-        {
-          insertText: {
-            location: { index: insertIndex },
-            text: '\n',
-          },
-        },
-      ]);
-      doc = await getDocument(docId);
-      insertIndex = getInsertIndex(doc);
-    }
-  }
-
-  const titleStart = insertIndex + plan.startMarker.length + 1;
   await batchUpdate(docId, [
     {
       insertText: {
         location: { index: insertIndex },
-        text: `${plan.startMarker}\n${plan.title}\n\n`,
+        text,
       },
     },
     {
       updateParagraphStyle: {
         range: {
           startIndex: titleStart,
-          endIndex: titleStart + plan.title.length,
+          endIndex: titleStart + title.length,
         },
         paragraphStyle: { namedStyleType: 'HEADING_2' },
         fields: 'namedStyleType',
@@ -545,76 +331,48 @@ async function upsertDateSection(docId, dateISO, data) {
     },
     buildTitleBrandStyleRequest(titleStart),
   ]);
-
-  doc = await getDocument(docId);
-  insertIndex = getInsertIndex(doc);
-
-  for (const section of plan.sections) {
-    const headingStart = insertIndex;
-    await batchUpdate(docId, [
-      {
-        insertText: {
-          location: { index: insertIndex },
-          text: `${section.title}\n`,
-        },
-      },
-      {
-        updateParagraphStyle: {
-          range: {
-            startIndex: headingStart,
-            endIndex: headingStart + section.title.length,
-          },
-          paragraphStyle: { namedStyleType: 'HEADING_3' },
-          fields: 'namedStyleType',
-        },
-      },
-    ]);
-
-    doc = await getDocument(docId);
-    insertIndex = getInsertIndex(doc);
-
-    if (section.type === 'table') {
-      await insertTableSection(
-        docId,
-        insertIndex,
-        section.rows,
-        section.columnWidthRatio
-      );
-      doc = await getDocument(docId);
-      insertIndex = getInsertIndex(doc);
-      await batchUpdate(docId, [
-        {
-          insertText: {
-            location: { index: insertIndex },
-            text: '\n',
-          },
-        },
-      ]);
-      doc = await getDocument(docId);
-      insertIndex = getInsertIndex(doc);
-    }
-  }
-
-  await batchUpdate(docId, [
-    {
-      insertText: {
-        location: { index: insertIndex },
-        text: `\n${plan.footer}\n${plan.endMarker}\n\n`,
-      },
-    },
-  ]);
 }
 
-export async function saveToGoogleDocs(dateISO, data) {
+/**
+ * 화면(또는 전달된) 날짜들의 최종 스냅샷만 Docs에 기록합니다.
+ * 본문을 통째로 비운 뒤, 날짜 오름차순으로 문서 끝에만 다시 씁니다.
+ * @param {Array<{ dateISO: string, data: object }>} entries
+ */
+export async function saveToGoogleDocs(entries) {
   if (!isAuthenticated()) {
     throw createAuthExpiredError();
   }
 
+  const list = Array.isArray(entries) ? entries : [];
+  if (list.length === 0) {
+    throw new Error('저장할 날짜 자료가 없습니다.');
+  }
+
+  const sorted = [...list].sort((a, b) => a.dateISO.localeCompare(b.dateISO));
   const docId = await resolveMasterDoc();
-  await upsertDateSection(docId, dateISO, data);
+
+  await clearDocumentBody(docId);
+
+  for (const { dateISO, data } of sorted) {
+    await appendDateSection(docId, dateISO, data);
+  }
+
+  const finalDoc = await getDocument(docId);
+  for (const { dateISO } of sorted) {
+    const raw = JSON.stringify(finalDoc.body || {});
+    if (
+      !raw.includes(sectionStartMarker(dateISO)) ||
+      !raw.includes(sectionEndMarker(dateISO))
+    ) {
+      throw new Error(
+        `${dateISO} 섹션 저장 검증에 실패했습니다. 다시 저장해 주세요.`
+      );
+    }
+  }
 
   return {
     docId,
     url: `https://docs.google.com/document/d/${docId}/edit`,
+    savedDates: sorted.map((entry) => entry.dateISO),
   };
 }
