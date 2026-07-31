@@ -51,9 +51,10 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 
 ### 3. Google Docs 저장
 
-- Drive에 `TimeBox4 Planner` 폴더와 `TimeBox4 Planner Journal` 문서가 생성됩니다.
+- Drive에 `TimeBox4 Planner` 폴더와 `Timebox Planner Journal(v2)` 문서가 생성됩니다.
 - Timebox3의 Journal과는 분리됩니다.
-- **구글 닥스에 저장** 버튼을 눌렀을 때만 반영됩니다.
+- **구글 닥스에 저장** 버튼을 누르면 화면에 표시된 날짜 스트립(오늘 ±4일) 전체 자료를 한 번에 기록합니다.
+- 같은 날짜의 이전 섹션은 삭제한 뒤 **최종 내용만** 남기고, 문서 안에서는 **날짜 오름차순**으로 정렬됩니다.
 
 ### 4. Google Calendar 동기화 규칙
 

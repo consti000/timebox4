@@ -190,13 +190,17 @@ function isSectionStartParagraph(text) {
   return trimmed.startsWith(SECTION_START_PREFIX) && trimmed.endsWith(']]');
 }
 
-function findAllDateSectionRanges(doc, dateISO) {
-  const targetStart = sectionStartMarker(dateISO);
-  const targetEnd = sectionEndMarker(dateISO);
-  const content = doc.body?.content || [];
-  const paragraphs = [];
+function parseSectionStartDate(text) {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith(SECTION_START_PREFIX) || !trimmed.endsWith(']]')) {
+    return null;
+  }
+  return trimmed.slice(SECTION_START_PREFIX.length, -2);
+}
 
-  for (const block of content) {
+function listSectionParagraphs(doc) {
+  const paragraphs = [];
+  for (const block of doc.body?.content || []) {
     if (!block.paragraph) continue;
     paragraphs.push({
       startIndex: block.startIndex,
@@ -204,37 +208,64 @@ function findAllDateSectionRanges(doc, dateISO) {
       text: getParagraphText(block).trim(),
     });
   }
+  return paragraphs;
+}
 
+function findSectionRangeFromParagraphs(paragraphs, startIdx, doc) {
+  const startIndex = paragraphs[startIdx].startIndex;
+  const startDate = parseSectionStartDate(paragraphs[startIdx].text);
+  const targetEnd = startDate ? sectionEndMarker(startDate) : null;
+  let endIndex = null;
+
+  for (let j = startIdx + 1; j < paragraphs.length; j += 1) {
+    const text = paragraphs[j].text;
+    if (targetEnd && text === targetEnd) {
+      endIndex = paragraphs[j].endIndex;
+      break;
+    }
+    if (isSectionStartParagraph(text)) {
+      endIndex = paragraphs[j].startIndex;
+      break;
+    }
+  }
+
+  if (endIndex == null) {
+    endIndex = getDocEndIndex(doc) - 1;
+  }
+
+  if (endIndex > startIndex) {
+    return { startIndex, endIndex, dateISO: startDate };
+  }
+  return null;
+}
+
+function findAllDateSectionRanges(doc, dateISO) {
+  const targetStart = sectionStartMarker(dateISO);
+  const paragraphs = listSectionParagraphs(doc);
   const ranges = [];
 
   for (let i = 0; i < paragraphs.length; i += 1) {
     if (paragraphs[i].text !== targetStart) continue;
-
-    const startIndex = paragraphs[i].startIndex;
-    let endIndex = null;
-
-    for (let j = i + 1; j < paragraphs.length; j += 1) {
-      const text = paragraphs[j].text;
-      if (text === targetEnd) {
-        endIndex = paragraphs[j].endIndex;
-        break;
-      }
-      if (isSectionStartParagraph(text)) {
-        endIndex = paragraphs[j].startIndex;
-        break;
-      }
-    }
-
-    if (endIndex == null) {
-      endIndex = getDocEndIndex(doc) - 1;
-    }
-
-    if (endIndex > startIndex) {
-      ranges.push({ startIndex, endIndex });
+    const range = findSectionRangeFromParagraphs(paragraphs, i, doc);
+    if (range) {
+      ranges.push({ startIndex: range.startIndex, endIndex: range.endIndex });
     }
   }
 
   return ranges;
+}
+
+function findInsertIndexForDate(doc, dateISO) {
+  const paragraphs = listSectionParagraphs(doc);
+
+  for (const paragraph of paragraphs) {
+    const sectionDate = parseSectionStartDate(paragraph.text);
+    if (sectionDate && sectionDate > dateISO) {
+      return paragraph.startIndex;
+    }
+  }
+
+  return getInsertIndex(doc);
 }
 
 async function deleteAllDateSections(docId, ranges) {
@@ -248,9 +279,16 @@ async function deleteAllDateSections(docId, ranges) {
   await batchUpdate(docId, requests);
 }
 
-function findLastTable(doc) {
+function findTableNearIndex(doc, nearIndex) {
   const tables = (doc.body?.content || []).filter((block) => block.table);
-  return tables.at(-1) ?? null;
+  const exact = tables.find((block) => block.startIndex === nearIndex);
+  if (exact) return exact;
+
+  return (
+    tables
+      .filter((block) => block.startIndex >= nearIndex)
+      .sort((a, b) => a.startIndex - b.startIndex)[0] ?? null
+  );
 }
 
 function getTableCellStartIndices(tableBlock) {
@@ -461,7 +499,7 @@ async function insertTableSection(docId, insertIndex, rows, columnWidthRatio) {
   ]);
 
   const doc = await getDocument(docId);
-  const tableBlock = findLastTable(doc);
+  const tableBlock = findTableNearIndex(doc, insertIndex);
   if (!tableBlock) {
     throw new Error('표 생성 후 문서에서 표를 찾지 못했습니다.');
   }
@@ -498,39 +536,27 @@ async function insertTableSection(docId, insertIndex, rows, columnWidthRatio) {
     );
     await batchUpdate(docId, widthRequests);
   }
+
+  // 셀 텍스트 삽입 후 인덱스가 밀리므로 표 끝 위치를 다시 읽는다.
+  const refreshed = await getDocument(docId);
+  const refreshedTable = findTableNearIndex(refreshed, tableStartIndex);
+  if (!refreshedTable) {
+    throw new Error('표 갱신 후 문서에서 표를 찾지 못했습니다.');
+  }
+  return refreshedTable.endIndex;
 }
 
-async function upsertDateSection(docId, dateISO, data) {
+async function insertDateSectionAt(docId, insertIndex, dateISO, data) {
   const plan = buildSectionPlan(dateISO, data);
-  let doc = await getDocument(docId);
-  const existingRanges = findAllDateSectionRanges(doc, dateISO);
-  let insertIndex;
+  let cursor = insertIndex;
 
-  if (existingRanges.length > 0) {
-    insertIndex = Math.min(...existingRanges.map((range) => range.startIndex));
-    await deleteAllDateSections(docId, existingRanges);
-  } else {
-    insertIndex = getInsertIndex(doc);
-    if (insertIndex > 1) {
-      await batchUpdate(docId, [
-        {
-          insertText: {
-            location: { index: insertIndex },
-            text: '\n',
-          },
-        },
-      ]);
-      doc = await getDocument(docId);
-      insertIndex = getInsertIndex(doc);
-    }
-  }
-
-  const titleStart = insertIndex + plan.startMarker.length + 1;
+  const header = `${plan.startMarker}\n${plan.title}\n\n`;
+  const titleStart = cursor + plan.startMarker.length + 1;
   await batchUpdate(docId, [
     {
       insertText: {
-        location: { index: insertIndex },
-        text: `${plan.startMarker}\n${plan.title}\n\n`,
+        location: { index: cursor },
+        text: header,
       },
     },
     {
@@ -545,17 +571,16 @@ async function upsertDateSection(docId, dateISO, data) {
     },
     buildTitleBrandStyleRequest(titleStart),
   ]);
-
-  doc = await getDocument(docId);
-  insertIndex = getInsertIndex(doc);
+  cursor += header.length;
 
   for (const section of plan.sections) {
-    const headingStart = insertIndex;
+    const heading = `${section.title}\n`;
+    const headingStart = cursor;
     await batchUpdate(docId, [
       {
         insertText: {
-          location: { index: insertIndex },
-          text: `${section.title}\n`,
+          location: { index: cursor },
+          text: heading,
         },
       },
       {
@@ -569,52 +594,72 @@ async function upsertDateSection(docId, dateISO, data) {
         },
       },
     ]);
-
-    doc = await getDocument(docId);
-    insertIndex = getInsertIndex(doc);
+    cursor += heading.length;
 
     if (section.type === 'table') {
-      await insertTableSection(
+      cursor = await insertTableSection(
         docId,
-        insertIndex,
+        cursor,
         section.rows,
         section.columnWidthRatio
       );
-      doc = await getDocument(docId);
-      insertIndex = getInsertIndex(doc);
       await batchUpdate(docId, [
         {
           insertText: {
-            location: { index: insertIndex },
+            location: { index: cursor },
             text: '\n',
           },
         },
       ]);
-      doc = await getDocument(docId);
-      insertIndex = getInsertIndex(doc);
+      cursor += 1;
     }
   }
 
+  const footer = `\n${plan.footer}\n${plan.endMarker}\n\n`;
   await batchUpdate(docId, [
     {
       insertText: {
-        location: { index: insertIndex },
-        text: `\n${plan.footer}\n${plan.endMarker}\n\n`,
+        location: { index: cursor },
+        text: footer,
       },
     },
   ]);
 }
 
-export async function saveToGoogleDocs(dateISO, data) {
+/**
+ * 화면(또는 전달된) 날짜들의 최종 스냅샷만 Docs에 기록합니다.
+ * 같은 날짜의 이전 섹션은 삭제한 뒤, 날짜 오름차순으로 재삽입합니다.
+ * @param {Array<{ dateISO: string, data: object }>} entries
+ */
+export async function saveToGoogleDocs(entries) {
   if (!isAuthenticated()) {
     throw createAuthExpiredError();
   }
 
+  const list = Array.isArray(entries) ? entries : [];
+  if (list.length === 0) {
+    throw new Error('저장할 날짜 자료가 없습니다.');
+  }
+
+  const sorted = [...list].sort((a, b) => a.dateISO.localeCompare(b.dateISO));
   const docId = await resolveMasterDoc();
-  await upsertDateSection(docId, dateISO, data);
+
+  let doc = await getDocument(docId);
+  const rangesToDelete = [];
+  for (const { dateISO } of sorted) {
+    rangesToDelete.push(...findAllDateSectionRanges(doc, dateISO));
+  }
+  await deleteAllDateSections(docId, rangesToDelete);
+
+  for (const { dateISO, data } of sorted) {
+    doc = await getDocument(docId);
+    const insertIndex = findInsertIndexForDate(doc, dateISO);
+    await insertDateSectionAt(docId, insertIndex, dateISO, data);
+  }
 
   return {
     docId,
     url: `https://docs.google.com/document/d/${docId}/edit`,
+    savedDates: sorted.map((entry) => entry.dateISO),
   };
 }
