@@ -190,12 +190,9 @@ function isSectionStartParagraph(text) {
   return trimmed.startsWith(SECTION_START_PREFIX) && trimmed.endsWith(']]');
 }
 
-function parseSectionStartDate(text) {
+function isSectionEndParagraph(text) {
   const trimmed = text.trim();
-  if (!trimmed.startsWith(SECTION_START_PREFIX) || !trimmed.endsWith(']]')) {
-    return null;
-  }
-  return trimmed.slice(SECTION_START_PREFIX.length, -2);
+  return trimmed.startsWith(SECTION_END_PREFIX) && trimmed.endsWith(']]');
 }
 
 function listSectionParagraphs(doc) {
@@ -211,64 +208,30 @@ function listSectionParagraphs(doc) {
   return paragraphs;
 }
 
-function findSectionRangeFromParagraphs(paragraphs, startIdx, doc) {
-  const startIndex = paragraphs[startIdx].startIndex;
-  const startDate = parseSectionStartDate(paragraphs[startIdx].text);
-  const targetEnd = startDate ? sectionEndMarker(startDate) : null;
-  let endIndex = null;
+/**
+ * 깨진 START/END 짝·고아 본문까지 포함해 Timebox 관련 구간을 모두 찾습니다.
+ * 첫 Timebox 마커부터 문서 끝까지 한 번에 지워, 손상·중복 잔여물을 남기지 않습니다.
+ */
+function findAllTimeboxContentRanges(doc) {
+  const paragraphs = listSectionParagraphs(doc);
+  let first = null;
 
-  for (let j = startIdx + 1; j < paragraphs.length; j += 1) {
-    const text = paragraphs[j].text;
-    if (targetEnd && text === targetEnd) {
-      endIndex = paragraphs[j].endIndex;
+  for (const p of paragraphs) {
+    if (isSectionStartParagraph(p.text) || isSectionEndParagraph(p.text)) {
+      // END만 앞에 있는 고아는 본문(표)이 마커 앞에 있을 수 있어 문서 시작부터 삭제
+      first = isSectionEndParagraph(p.text) ? 1 : p.startIndex;
       break;
     }
-    if (isSectionStartParagraph(text)) {
-      endIndex = paragraphs[j].startIndex;
-      break;
-    }
   }
 
-  if (endIndex == null) {
-    endIndex = getDocEndIndex(doc) - 1;
-  }
+  if (first == null) return [];
 
-  if (endIndex > startIndex) {
-    return { startIndex, endIndex, dateISO: startDate };
-  }
-  return null;
+  const endIndex = getDocEndIndex(doc) - 1;
+  if (endIndex <= first) return [];
+  return [{ startIndex: first, endIndex }];
 }
 
-function findAllDateSectionRanges(doc, dateISO) {
-  const targetStart = sectionStartMarker(dateISO);
-  const paragraphs = listSectionParagraphs(doc);
-  const ranges = [];
-
-  for (let i = 0; i < paragraphs.length; i += 1) {
-    if (paragraphs[i].text !== targetStart) continue;
-    const range = findSectionRangeFromParagraphs(paragraphs, i, doc);
-    if (range) {
-      ranges.push({ startIndex: range.startIndex, endIndex: range.endIndex });
-    }
-  }
-
-  return ranges;
-}
-
-function findInsertIndexForDate(doc, dateISO) {
-  const paragraphs = listSectionParagraphs(doc);
-
-  for (const paragraph of paragraphs) {
-    const sectionDate = parseSectionStartDate(paragraph.text);
-    if (sectionDate && sectionDate > dateISO) {
-      return paragraph.startIndex;
-    }
-  }
-
-  return getInsertIndex(doc);
-}
-
-async function deleteAllDateSections(docId, ranges) {
+async function deleteContentRanges(docId, ranges) {
   if (!ranges.length) return;
 
   const sorted = [...ranges].sort((a, b) => b.startIndex - a.startIndex);
@@ -279,16 +242,9 @@ async function deleteAllDateSections(docId, ranges) {
   await batchUpdate(docId, requests);
 }
 
-function findTableNearIndex(doc, nearIndex) {
+function findLastTable(doc) {
   const tables = (doc.body?.content || []).filter((block) => block.table);
-  const exact = tables.find((block) => block.startIndex === nearIndex);
-  if (exact) return exact;
-
-  return (
-    tables
-      .filter((block) => block.startIndex >= nearIndex)
-      .sort((a, b) => a.startIndex - b.startIndex)[0] ?? null
-  );
+  return tables.at(-1) ?? null;
 }
 
 function getTableCellStartIndices(tableBlock) {
@@ -499,7 +455,7 @@ async function insertTableSection(docId, insertIndex, rows, columnWidthRatio) {
   ]);
 
   const doc = await getDocument(docId);
-  const tableBlock = findTableNearIndex(doc, insertIndex);
+  const tableBlock = findLastTable(doc);
   if (!tableBlock) {
     throw new Error('표 생성 후 문서에서 표를 찾지 못했습니다.');
   }
@@ -536,27 +492,20 @@ async function insertTableSection(docId, insertIndex, rows, columnWidthRatio) {
     );
     await batchUpdate(docId, widthRequests);
   }
-
-  // 셀 텍스트 삽입 후 인덱스가 밀리므로 표 끝 위치를 다시 읽는다.
-  const refreshed = await getDocument(docId);
-  const refreshedTable = findTableNearIndex(refreshed, tableStartIndex);
-  if (!refreshedTable) {
-    throw new Error('표 갱신 후 문서에서 표를 찾지 못했습니다.');
-  }
-  return refreshedTable.endIndex;
 }
 
-async function insertDateSectionAt(docId, insertIndex, dateISO, data) {
+/** 문서 끝에 날짜 섹션 한 개를 append합니다. */
+async function appendDateSection(docId, dateISO, data) {
   const plan = buildSectionPlan(dateISO, data);
-  let cursor = insertIndex;
+  let doc = await getDocument(docId);
+  let insertIndex = getInsertIndex(doc);
 
-  const header = `${plan.startMarker}\n${plan.title}\n\n`;
-  const titleStart = cursor + plan.startMarker.length + 1;
+  const titleStart = insertIndex + plan.startMarker.length + 1;
   await batchUpdate(docId, [
     {
       insertText: {
-        location: { index: cursor },
-        text: header,
+        location: { index: insertIndex },
+        text: `${plan.startMarker}\n${plan.title}\n\n`,
       },
     },
     {
@@ -571,16 +520,17 @@ async function insertDateSectionAt(docId, insertIndex, dateISO, data) {
     },
     buildTitleBrandStyleRequest(titleStart),
   ]);
-  cursor += header.length;
 
   for (const section of plan.sections) {
-    const heading = `${section.title}\n`;
-    const headingStart = cursor;
+    doc = await getDocument(docId);
+    insertIndex = getInsertIndex(doc);
+    const headingStart = insertIndex;
+
     await batchUpdate(docId, [
       {
         insertText: {
-          location: { index: cursor },
-          text: heading,
+          location: { index: insertIndex },
+          text: `${section.title}\n`,
         },
       },
       {
@@ -594,33 +544,37 @@ async function insertDateSectionAt(docId, insertIndex, dateISO, data) {
         },
       },
     ]);
-    cursor += heading.length;
 
     if (section.type === 'table') {
-      cursor = await insertTableSection(
+      doc = await getDocument(docId);
+      insertIndex = getInsertIndex(doc);
+      await insertTableSection(
         docId,
-        cursor,
+        insertIndex,
         section.rows,
         section.columnWidthRatio
       );
+
+      doc = await getDocument(docId);
+      insertIndex = getInsertIndex(doc);
       await batchUpdate(docId, [
         {
           insertText: {
-            location: { index: cursor },
+            location: { index: insertIndex },
             text: '\n',
           },
         },
       ]);
-      cursor += 1;
     }
   }
 
-  const footer = `\n${plan.footer}\n${plan.endMarker}\n\n`;
+  doc = await getDocument(docId);
+  insertIndex = getInsertIndex(doc);
   await batchUpdate(docId, [
     {
       insertText: {
-        location: { index: cursor },
-        text: footer,
+        location: { index: insertIndex },
+        text: `\n${plan.footer}\n${plan.endMarker}\n\n`,
       },
     },
   ]);
@@ -628,7 +582,7 @@ async function insertDateSectionAt(docId, insertIndex, dateISO, data) {
 
 /**
  * 화면(또는 전달된) 날짜들의 최종 스냅샷만 Docs에 기록합니다.
- * 같은 날짜의 이전 섹션은 삭제한 뒤, 날짜 오름차순으로 재삽입합니다.
+ * 기존 Timebox 구간(손상·고아 포함)을 전부 삭제한 뒤, 날짜 오름차순으로 문서 끝에만 다시 씁니다.
  * @param {Array<{ dateISO: string, data: object }>} entries
  */
 export async function saveToGoogleDocs(entries) {
@@ -644,17 +598,12 @@ export async function saveToGoogleDocs(entries) {
   const sorted = [...list].sort((a, b) => a.dateISO.localeCompare(b.dateISO));
   const docId = await resolveMasterDoc();
 
-  let doc = await getDocument(docId);
-  const rangesToDelete = [];
-  for (const { dateISO } of sorted) {
-    rangesToDelete.push(...findAllDateSectionRanges(doc, dateISO));
-  }
-  await deleteAllDateSections(docId, rangesToDelete);
+  const doc = await getDocument(docId);
+  const wipeRanges = findAllTimeboxContentRanges(doc);
+  await deleteContentRanges(docId, wipeRanges);
 
   for (const { dateISO, data } of sorted) {
-    doc = await getDocument(docId);
-    const insertIndex = findInsertIndexForDate(doc, dateISO);
-    await insertDateSectionAt(docId, insertIndex, dateISO, data);
+    await appendDateSection(docId, dateISO, data);
   }
 
   return {

@@ -128,7 +128,7 @@ async function syncToGoogle() {
     link.rel = 'noopener';
     link.textContent = '통합 문서 열기';
     const count = result.savedDates?.length ?? entries.length;
-    els.syncStatus.append(`✅ ${count}일 자료 저장됨 (날짜순) — `, link);
+    els.syncStatus.append(`✅ ${count}일 재작성·날짜순 저장됨 — `, link);
     return { ok: true, url: result.url };
   } catch (err) {
     if (isAuthExpiredError(err)) {
@@ -572,7 +572,7 @@ function bindEvents() {
 
     const result = await syncToGoogle();
     if (result.ok) {
-      showToast('화면에 표시된 날짜 자료가 Google Docs에 날짜순으로 저장되었습니다.', 'success');
+      showToast('기존 섹션을 정리한 뒤 화면 날짜 자료를 날짜순으로 다시 저장했습니다.', 'success');
     } else if (result.reason === 'busy') {
       showToast('저장 중입니다. 잠시 후 최신 내용이 반영됩니다.');
     } else if (result.reason === 'error') {
