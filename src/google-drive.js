@@ -248,17 +248,77 @@ function buildDateSectionHtml(dateISO, data) {
   ].join('\n');
 }
 
+function getParagraphText(block) {
+  if (!block?.paragraph?.elements) return '';
+  return block.paragraph.elements
+    .map((el) => el.textRun?.content || '')
+    .join('');
+}
+
+function findParagraphStartIndex(doc, exactText) {
+  const target = exactText.trim();
+  for (const block of doc.body?.content || []) {
+    if (!block.paragraph || block.startIndex == null) continue;
+    if (getParagraphText(block).trim() === target) {
+      return block.startIndex;
+    }
+  }
+  return null;
+}
+
+async function batchUpdate(docId, requests) {
+  if (!requests.length) return;
+  await apiFetch(`https://docs.googleapis.com/v1/documents/${docId}:batchUpdate`, {
+    method: 'POST',
+    body: JSON.stringify({ requests }),
+  });
+}
+
+/**
+ * HTML 변환은 CSS page-break를 무시하는 경우가 많아,
+ * 업로드 후 Docs API로 두 번째 날짜부터 START 마커 앞에 페이지 나누기를 넣습니다.
+ * (호출 1~2회라 저장 시간은 거의 늘지 않음)
+ */
+async function insertPageBreaksBetweenDates(docId, dateISOs) {
+  if (dateISOs.length < 2) return;
+
+  const doc = await getDocument(docId);
+  const indices = [];
+
+  for (let i = 1; i < dateISOs.length; i += 1) {
+    const marker = sectionStartMarker(dateISOs[i]);
+    const index =
+      findParagraphStartIndex(doc, marker) ??
+      findParagraphStartIndex(doc, formatDateTitle(dateISOs[i]));
+    if (index != null) {
+      indices.push(index);
+    }
+  }
+
+  if (!indices.length) return;
+
+  // 뒤에서부터 삽입해야 앞쪽 인덱스가 밀리지 않음
+  indices.sort((a, b) => b - a);
+  await batchUpdate(
+    docId,
+    indices.map((index) => ({
+      insertPageBreak: { location: { index } },
+    }))
+  );
+}
+
 /**
  * 9일 자료를 하나의 HTML로 만들고 Drive multipart 업로드로
  * Google Doc 본문을 한 번에 교체합니다 (Docs API 표 삽입 반복 대비 대폭 빠름).
  */
 function buildJournalHtml(entries) {
   const sections = entries.map((entry, index) => {
-    const pageBreak =
+    // Drive HTML 변환용 힌트(실제 분리는 insertPageBreaksBetweenDates가 담당)
+    const pageBreakHint =
       index > 0
-        ? '<div style="page-break-before:always"></div>\n'
+        ? '<hr style="page-break-before:always;border:none;margin:0;height:0">\n'
         : '';
-    return pageBreak + buildDateSectionHtml(entry.dateISO, entry.data);
+    return pageBreakHint + buildDateSectionHtml(entry.dateISO, entry.data);
   });
 
   return `<!DOCTYPE html>
@@ -303,7 +363,7 @@ async function getDocument(docId) {
 
 /**
  * 화면(또는 전달된) 날짜들의 최종 스냅샷만 Docs에 기록합니다.
- * HTML 변환 업로드로 전체 문서를 한 번에 교체해 저장 시간을 단축합니다.
+ * HTML 변환 업로드로 전체 문서를 한 번에 교체한 뒤, 날짜별 페이지 나누기를 적용합니다.
  * @param {Array<{ dateISO: string, data: object }>} entries
  */
 export async function saveToGoogleDocs(entries) {
@@ -321,6 +381,10 @@ export async function saveToGoogleDocs(entries) {
   const html = buildJournalHtml(sorted);
 
   await replaceDocumentWithHtml(docId, html);
+  await insertPageBreaksBetweenDates(
+    docId,
+    sorted.map((entry) => entry.dateISO)
+  );
 
   const finalDoc = await getDocument(docId);
   const raw = JSON.stringify(finalDoc.body || {});
