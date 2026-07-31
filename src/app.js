@@ -572,7 +572,7 @@ function bindEvents() {
 
     const result = await syncToGoogle();
     if (result.ok) {
-      showToast('기존 섹션을 정리한 뒤 화면 날짜 자료를 날짜순으로 다시 저장했습니다.', 'success');
+      showToast('Journal(v3)에 화면 날짜 자료를 날짜순으로 다시 저장했습니다.', 'success');
     } else if (result.reason === 'busy') {
       showToast('저장 중입니다. 잠시 후 최신 내용이 반영됩니다.');
     } else if (result.reason === 'error') {
