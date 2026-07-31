@@ -54,7 +54,9 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 - Drive에 `TimeBox4 Planner` 폴더와 `Timebox Planner Journal(v3)` 문서가 생성됩니다.
 - 이전 `Journal(v2)`는 사용하지 않습니다(손상된 문서와 분리).
 - **구글 닥스에 저장** 버튼을 누르면 화면에 표시된 날짜 스트립(오늘 ±4일) 전체 자료를 한 번에 기록합니다.
-- 저장 시 문서 본문을 통째로 비운 뒤, **최종 내용만** 날짜 오름차순으로 텍스트 섹션으로 다시 씁니다.
+- 저장 시 문서 본문을 통째로 비운 뒤, **최종 내용만** 날짜 오름차순으로 다시 씁니다.
+- 날짜마다 **새 페이지**에서 시작하며, 제목은 `2026년 7월 27일` 형식(문서 개요/탭용 HEADING)입니다.
+- 웹 화면과 같이 **표**로 Top 3·할 일·타임박스·Brain Dump를 기록합니다.
 
 ### 4. Google Calendar 동기화 규칙
 
