@@ -493,48 +493,6 @@ function updateGoogleButton() {
   }
 }
 
-function exportToExcelFriendlyCsv() {
-  const rows = [];
-  rows.push(['날짜', currentDate]);
-  rows.push([]);
-  rows.push(['Top 3 우선순위']);
-  dayData.priorities.forEach((item, index) => {
-    rows.push([`${index + 1}`, item.text || '']);
-  });
-  rows.push([]);
-  rows.push(['할 일 목록']);
-  if (dayData.brainDump.length === 0) {
-    rows.push(['(항목 없음)']);
-  } else {
-    dayData.brainDump.forEach((item) => {
-      rows.push([item.done ? '완료' : '미완료', item.text || '']);
-    });
-  }
-  rows.push([]);
-  rows.push(['타임박스']);
-  TIME_SLOTS.forEach((slot) => {
-    rows.push([slot, dayData.timeline[slot] || '']);
-  });
-  rows.push([]);
-  rows.push(['Brain Dump 메모', dayData.memo || '']);
-
-  const csv = rows
-    .map((row) =>
-      row
-        .map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`)
-        .join(',')
-    )
-    .join('\n');
-
-  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `timebox4-${currentDate}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
 function bindEvents() {
   els.dateInput.addEventListener('change', () => {
     const next = els.dateInput.value;
@@ -640,11 +598,6 @@ function bindEvents() {
       showToast(result.message || '캘린더 보내기에 실패했습니다.', 'error');
     }
   });
-
-  els.excelExportBtn.addEventListener('click', () => {
-    exportToExcelFriendlyCsv();
-    showToast('엑셀용 CSV를 다운로드했습니다.', 'success');
-  });
 }
 
 export function initApp() {
@@ -667,7 +620,6 @@ export function initApp() {
   els.manualSaveBtn = $('manual-save-btn');
   els.calendarPullBtn = $('calendar-pull-btn');
   els.calendarPushBtn = $('calendar-push-btn');
-  els.excelExportBtn = $('excel-export-btn');
   els.toast = $('toast');
 
   dayData = loadDayData(currentDate);

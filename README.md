@@ -10,7 +10,6 @@ Timebox3와는 **별도 저장소·별도 localStorage·별도 Docs 문서**를 
 - **할 일 목록** — 추가 / 완료 / 삭제
 - **타임박스** — 05:00~24:00, 30분 단위
 - **Brain Dump** — 자유 메모
-- **엑셀** — 현재 날짜 CSV 다운로드
 - **로컬 저장** — `timebox4_` prefix localStorage
 - **Google Docs** — `TimeBox4 Planner Journal` 단일 문서에 날짜 섹션 저장
 - **Google Calendar**
@@ -65,6 +64,10 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 | 불러오기 | timed 이벤트 → 빈 타임박스 슬롯만 채움. **종일 일정 → 할 일 목록에 추가**(동일 제목 중복 제외). Timebox4가 만든 일정은 무시 |
 | 보내기 | 타임라인 블록을 제목+시작(또는 시간 겹침)으로 기존 일정과 매칭. Timebox4면 수정, 외부면 생성 생략. Timebox4 중복분은 삭제 |
 | 자동 동기화 | 없음 (버튼 수동) |
+- 캘린더 동기화는 1일 단위로 현재 웹화면의 내용만 반영됨
+- 구글 캘린더의 시간대가 30분을 초과할 경우 timebox에는 2개 이상이 기록됨
+- 캘린더 불러오기, 내보내기는 '제목'과 '시작시간'만을 대조하여 중복을 제거함
+
 
 ## 배포
 
