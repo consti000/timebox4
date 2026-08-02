@@ -14,7 +14,7 @@ Timebox3와는 **별도 저장소·별도 localStorage·별도 Docs 문서**를 
 - **로컬 저장** — `timebox4_` prefix localStorage
 - **Google Docs** — `TimeBox4 Planner Journal` 단일 문서에 날짜 섹션 저장
 - **Google Calendar**
-  - **불러오기**: 해당일 timed 일정을 빈 슬롯에만 채움 (기존 입력 유지, timebox4 소유 이벤트 제외)
+  - **불러오기**: timed 일정은 빈 슬롯에만 채움, **종일 일정은 할 일 목록에 추가** (기존 입력 유지, timebox4 소유 이벤트 제외)
   - **보내기**: 연속·동일 제목 슬롯을 하나의 일정으로 병합 후 upsert (`timeboxOrigin=timebox4`만 관리)
 
 ## 시작하기
@@ -62,7 +62,7 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 
 | 동작 | 동작 방식 |
 |------|-----------|
-| 불러오기 | 선택 날짜의 timed 이벤트 → 30분 슬롯. **비어 있는 슬롯만** 채움. 종일 일정 스킵. Timebox4가 만든 일정은 무시 |
+| 불러오기 | timed 이벤트 → 빈 타임박스 슬롯만 채움. **종일 일정 → 할 일 목록에 추가**(동일 제목 중복 제외). Timebox4가 만든 일정은 무시 |
 | 보내기 | 타임라인의 연속·동일 제목을 하나로 병합. `extendedProperties.private.timeboxOrigin = timebox4` 이벤트만 create/update/delete |
 | 자동 동기화 | 없음 (버튼 수동) |
 

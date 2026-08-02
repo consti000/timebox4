@@ -155,25 +155,60 @@ function buildEventBody(dateISO, block) {
   };
 }
 
+function isAllDayEvent(event) {
+  return Boolean(event?.start?.date && !event?.start?.dateTime);
+}
+
+/** Google 종일 일정의 end.date는 exclusive 이므로 dateISO가 [start, end)에 포함되는지 확인 */
+function allDayCoversDate(event, dateISO) {
+  const start = event?.start?.date;
+  const end = event?.end?.date;
+  if (!start || !end) return false;
+  return start <= dateISO && dateISO < end;
+}
+
 /**
- * Fill empty timeline slots from external (non-timebox4) calendar events.
- * Existing local text is preserved.
+ * 외부(non-timebox4) 캘린더 일정을 반영합니다.
+ * - 시간이 있는 일정 → 빈 타임박스 슬롯만 채움
+ * - 종일 일정 → 할 일 목록에 추가(동일 제목 중복 방지)
  */
-export async function pullDayToTimeline(dateISO, timeline) {
+export async function pullDayToTimeline(dateISO, timeline, brainDump = []) {
   if (!isAuthenticated()) {
     throw createAuthExpiredError();
   }
 
   const events = await listDayEvents(dateISO, { ownedOnly: false });
   const next = { ...timeline };
+  const nextTodos = Array.isArray(brainDump) ? [...brainDump] : [];
+  const existingTodoKeys = new Set(
+    nextTodos
+      .map((item) => item?.text?.trim().toLowerCase())
+      .filter(Boolean)
+  );
   let filled = 0;
+  let todosAdded = 0;
 
   for (const event of events) {
     if (isTimeboxOwned(event)) continue;
-    if (!event.start?.dateTime || !event.end?.dateTime) continue;
 
     const summary = (event.summary || '(제목 없음)').trim();
     if (!summary) continue;
+
+    if (isAllDayEvent(event)) {
+      if (!allDayCoversDate(event, dateISO)) continue;
+      const key = summary.toLowerCase();
+      if (existingTodoKeys.has(key)) continue;
+      existingTodoKeys.add(key);
+      nextTodos.push({
+        text: summary,
+        done: false,
+        id: Date.now() + Math.random(),
+      });
+      todosAdded += 1;
+      continue;
+    }
+
+    if (!event.start?.dateTime || !event.end?.dateTime) continue;
 
     const start = new Date(event.start.dateTime);
     const end = new Date(event.end.dateTime);
@@ -186,7 +221,13 @@ export async function pullDayToTimeline(dateISO, timeline) {
     }
   }
 
-  return { timeline: next, filled, eventCount: events.length };
+  return {
+    timeline: next,
+    brainDump: nextTodos,
+    filled,
+    todosAdded,
+    eventCount: events.length,
+  };
 }
 
 /**

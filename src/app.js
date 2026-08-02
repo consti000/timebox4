@@ -163,7 +163,11 @@ async function pullFromCalendar() {
 
   try {
     const snapshot = { ...dayData.timeline };
-    const result = await pullDayToTimeline(currentDate, snapshot);
+    const result = await pullDayToTimeline(
+      currentDate,
+      snapshot,
+      dayData.brainDump
+    );
     // 요청 중 로컬에서 입력한 내용은 유지하고, 빈 슬롯만 캘린더 값으로 채움
     const merged = { ...result.timeline };
     for (const [slot, text] of Object.entries(dayData.timeline)) {
@@ -175,13 +179,25 @@ async function pullFromCalendar() {
       (slot) => merged[slot]?.trim() && !snapshot[slot]?.trim()
     ).length;
     dayData.timeline = merged;
+    dayData.brainDump = result.brainDump;
     persistLocal();
     renderTimeline();
+    renderBrainDump();
     setSaveIndicator('synced', '캘린더 불러옴');
     els.syncStatus.hidden = false;
     els.syncStatus.className = 'sync-status success';
-    els.syncStatus.textContent = `✅ 빈 슬롯 ${filled}개에 캘린더 일정을 반영했습니다.`;
-    return { ok: true, timeline: merged, filled, eventCount: result.eventCount };
+    const todoMsg =
+      result.todosAdded > 0
+        ? ` 종일 일정 ${result.todosAdded}건을 할 일 목록에 추가했습니다.`
+        : '';
+    els.syncStatus.textContent = `✅ 빈 슬롯 ${filled}개에 캘린더 일정을 반영했습니다.${todoMsg}`;
+    return {
+      ok: true,
+      timeline: merged,
+      filled,
+      todosAdded: result.todosAdded,
+      eventCount: result.eventCount,
+    };
   } catch (err) {
     if (isAuthExpiredError(err)) {
       handleAuthExpired();
@@ -583,10 +599,13 @@ function bindEvents() {
   els.calendarPullBtn.addEventListener('click', async () => {
     const result = await pullFromCalendar();
     if (result.ok) {
+      const parts = [];
+      if (result.filled > 0) parts.push(`슬롯 ${result.filled}개`);
+      if (result.todosAdded > 0) parts.push(`할 일 ${result.todosAdded}건`);
       showToast(
-        result.filled > 0
-          ? `캘린더에서 ${result.filled}개 슬롯을 채웠습니다.`
-          : '채울 빈 슬롯이 없거나 가져올 일정이 없습니다.',
+        parts.length > 0
+          ? `캘린더에서 ${parts.join(', ')}을(를) 반영했습니다.`
+          : '반영할 새 일정이 없습니다.',
         'success'
       );
     } else if (result.reason === 'error') {
