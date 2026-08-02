@@ -63,7 +63,7 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 | 동작 | 동작 방식 |
 |------|-----------|
 | 불러오기 | timed 이벤트 → 빈 타임박스 슬롯만 채움. **종일 일정 → 할 일 목록에 추가**(동일 제목 중복 제외). Timebox4가 만든 일정은 무시 |
-| 보내기 | 타임라인의 연속·동일 제목을 하나로 병합. `extendedProperties.private.timeboxOrigin = timebox4` 이벤트만 create/update/delete |
+| 보내기 | 타임라인의 연속·동일 제목을 하나로 병합. Timebox4 일정은 upsert. **이미 있는 외부 일정과 제목·시간이 같으면 생성하지 않음**(중복 방지) |
 | 자동 동기화 | 없음 (버튼 수동) |
 
 ## 배포

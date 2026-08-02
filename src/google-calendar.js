@@ -230,8 +230,101 @@ export async function pullDayToTimeline(dateISO, timeline, brainDump = []) {
   };
 }
 
+function normalizeSummary(value) {
+  return (value || '').trim().toLowerCase();
+}
+
+function eventStartEnd(event) {
+  if (!event?.start?.dateTime || !event?.end?.dateTime) return null;
+  return {
+    start: new Date(event.start.dateTime),
+    end: new Date(event.end.dateTime),
+  };
+}
+
+function sameInstant(a, b, toleranceMs = 60_000) {
+  return Math.abs(a.getTime() - b.getTime()) <= toleranceMs;
+}
+
+function rangeKeyFromDates(start, end) {
+  return eventRangeKey(
+    normalizeEventDateTime(start.toISOString()),
+    normalizeEventDateTime(end.toISOString())
+  );
+}
+
+/** private 속성 조회 + 당일 전체 조회를 합쳐 Timebox4 소유 일정을 빠짐없이 모읍니다. */
+async function listOwnedDayEvents(dateISO) {
+  const [byProp, allDay] = await Promise.all([
+    listDayEvents(dateISO, { ownedOnly: true }),
+    listDayEvents(dateISO, { ownedOnly: false }),
+  ]);
+
+  const map = new Map();
+  for (const event of byProp) {
+    if (event?.id) map.set(event.id, event);
+  }
+  for (const event of allDay) {
+    if (event?.id && isTimeboxOwned(event)) {
+      map.set(event.id, event);
+    }
+  }
+  return { owned: [...map.values()], allDay };
+}
+
+function findOwnedMatch(block, ownedEvents, claimedIds) {
+  const blockRangeKey = rangeKeyFromDates(block.start, block.end);
+  const blockSummary = normalizeSummary(block.summary);
+
+  for (const event of ownedEvents) {
+    if (!event?.id || claimedIds.has(event.id)) continue;
+    const range = eventStartEnd(event);
+    if (!range) continue;
+
+    if (rangeKeyFromDates(range.start, range.end) === blockRangeKey) {
+      return event;
+    }
+
+    // 제목+시작 시각이 같으면 같은 일정으로 간주 (끝 시각이 조금 달라도 매칭)
+    if (
+      normalizeSummary(event.summary) === blockSummary &&
+      sameInstant(range.start, block.start)
+    ) {
+      return event;
+    }
+  }
+  return null;
+}
+
 /**
- * Upsert timebox4-owned calendar events from timeline blocks.
+ * 캘린더에 이미 있는 외부(비-Timebox4) 일정과 제목·시간이 같으면 중복 생성하지 않습니다.
+ */
+function findExternalDuplicate(block, allEvents, claimedIds) {
+  const blockSummary = normalizeSummary(block.summary);
+  if (!blockSummary) return null;
+
+  for (const event of allEvents) {
+    if (!event?.id || claimedIds.has(event.id)) continue;
+    if (isTimeboxOwned(event) || isAllDayEvent(event)) continue;
+    if (normalizeSummary(event.summary) !== blockSummary) continue;
+
+    const range = eventStartEnd(event);
+    if (!range) continue;
+
+    if (
+      sameInstant(range.start, block.start) &&
+      sameInstant(range.end, block.end)
+    ) {
+      return event;
+    }
+  }
+  return null;
+}
+
+/**
+ * 타임라인 블록을 캘린더에 upsert합니다.
+ * - Timebox4 소유 일정: 시간/제목으로 매칭해 수정·유지
+ * - 이미 있는 외부 일정과 제목·시간이 같으면 생성 생략(중복 방지)
  */
 export async function pushTimelineToCalendar(dateISO, timeline) {
   if (!isAuthenticated()) {
@@ -239,43 +332,39 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
   }
 
   const blocks = mergeTimelineToBlocks(dateISO, timeline);
-  const existing = await listDayEvents(dateISO, { ownedOnly: true });
-  const unused = new Set(existing.map((event) => event.id).filter(Boolean));
-
-  const byRange = new Map();
-  for (const event of existing) {
-    if (!event.start?.dateTime || !event.end?.dateTime) continue;
-    const key = eventRangeKey(
-      normalizeEventDateTime(event.start.dateTime),
-      normalizeEventDateTime(event.end.dateTime)
-    );
-    byRange.set(key, event);
-  }
+  const { owned, allDay } = await listOwnedDayEvents(dateISO);
+  const unused = new Set(owned.map((event) => event.id).filter(Boolean));
+  const claimedIds = new Set();
 
   let created = 0;
   let updated = 0;
   let deleted = 0;
   let unchanged = 0;
+  let skipped = 0;
 
   for (const block of blocks) {
-    const key = eventRangeKey(
-      normalizeEventDateTime(block.startRfc),
-      normalizeEventDateTime(block.endRfc)
-    );
-    const match = byRange.get(key);
     const body = buildEventBody(dateISO, block);
+    const ownedMatch = findOwnedMatch(block, owned, claimedIds);
 
-    if (match) {
-      unused.delete(match.id);
-      if ((match.summary || '') === block.summary) {
+    if (ownedMatch) {
+      unused.delete(ownedMatch.id);
+      claimedIds.add(ownedMatch.id);
+      if ((ownedMatch.summary || '').trim() === block.summary) {
         unchanged += 1;
       } else {
         await apiFetch(
-          `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}/events/${encodeURIComponent(match.id)}`,
+          `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}/events/${encodeURIComponent(ownedMatch.id)}`,
           { method: 'PATCH', body: JSON.stringify(body) }
         );
         updated += 1;
       }
+      continue;
+    }
+
+    const external = findExternalDuplicate(block, allDay, claimedIds);
+    if (external) {
+      claimedIds.add(external.id);
+      skipped += 1;
       continue;
     }
 
@@ -299,6 +388,7 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
     updated,
     deleted,
     unchanged,
+    skipped,
     total: blocks.length,
     calendarUrl: calendarDayUrl(dateISO),
   };

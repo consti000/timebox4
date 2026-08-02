@@ -15,6 +15,7 @@ import {
   isAuthenticated,
   isAuthExpiredError,
   isQuotaError,
+  formatGoogleApiError,
   initGoogleAuth,
   signIn,
   signOut,
@@ -48,7 +49,26 @@ function showToast(message, type = '') {
   clearTimeout(showToast._timer);
   showToast._timer = setTimeout(() => {
     toast.hidden = true;
-  }, 3000);
+  }, type === 'error' ? 6000 : 3000);
+}
+
+function showSyncError(err) {
+  const formatted = formatGoogleApiError(err);
+  setSaveIndicator('', '실패');
+  els.syncStatus.hidden = false;
+  els.syncStatus.className = 'sync-status error';
+  els.syncStatus.replaceChildren();
+  els.syncStatus.append(`❌ ${formatted.message}`);
+  if (formatted.helpUrl) {
+    els.syncStatus.append(' ');
+    const link = document.createElement('a');
+    link.href = formatted.helpUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'API 사용 설정 열기';
+    els.syncStatus.appendChild(link);
+  }
+  return formatted;
 }
 
 function setSaveIndicator(state, text) {
@@ -203,11 +223,8 @@ async function pullFromCalendar() {
       handleAuthExpired();
       return { ok: false, reason: 'auth_expired' };
     }
-    setSaveIndicator('', '불러오기 실패');
-    els.syncStatus.hidden = false;
-    els.syncStatus.className = 'sync-status error';
-    els.syncStatus.textContent = `❌ ${err.message}`;
-    return { ok: false, reason: 'error', message: err.message };
+    const formatted = showSyncError(err);
+    return { ok: false, reason: 'error', message: formatted.message };
   } finally {
     calendarAction = null;
     updateGoogleButton();
@@ -236,8 +253,10 @@ async function pushToCalendar() {
     link.target = '_blank';
     link.rel = 'noopener';
     link.textContent = '캘린더 열기';
+    const skippedPart =
+      result.skipped > 0 ? ` · 중복생략 ${result.skipped}` : '';
     els.syncStatus.append(
-      `✅ 생성 ${result.created} · 수정 ${result.updated} · 삭제 ${result.deleted} · 유지 ${result.unchanged} — `,
+      `✅ 생성 ${result.created} · 수정 ${result.updated} · 삭제 ${result.deleted} · 유지 ${result.unchanged}${skippedPart} — `,
       link
     );
     return { ok: true, ...result };
@@ -246,11 +265,8 @@ async function pushToCalendar() {
       handleAuthExpired();
       return { ok: false, reason: 'auth_expired' };
     }
-    setSaveIndicator('', '보내기 실패');
-    els.syncStatus.hidden = false;
-    els.syncStatus.className = 'sync-status error';
-    els.syncStatus.textContent = `❌ ${err.message}`;
-    return { ok: false, reason: 'error', message: err.message };
+    const formatted = showSyncError(err);
+    return { ok: false, reason: 'error', message: formatted.message };
   } finally {
     calendarAction = null;
     updateGoogleButton();

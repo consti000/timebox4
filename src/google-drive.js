@@ -13,6 +13,7 @@ export {
   isAuthenticated,
   isAuthExpiredError,
   isQuotaError,
+  formatGoogleApiError,
   initGoogleAuth,
   signIn,
   signOut,

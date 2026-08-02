@@ -59,16 +59,16 @@ export function getGoogleSetupSteps() {
   if (isProductionDeploy()) {
     return [
       'GitHub 저장소 Settings → Secrets and variables → Actions에서 VITE_GOOGLE_CLIENT_ID를 추가합니다.',
-      'Google Cloud Console에서 OAuth 웹 클라이언트 ID를 발급합니다.',
-      '승인된 JavaScript 원본에 https://consti000.github.io 를 추가합니다.',
+      'Google Cloud Console에서 Drive·Docs·Calendar API를 사용 설정합니다.',
+      'OAuth 웹 클라이언트 ID를 발급하고 승인된 JavaScript 원본에 https://consti000.github.io 를 추가합니다.',
       'Secrets 저장 후 Actions에서 Deploy to GitHub Pages를 다시 실행합니다.',
     ];
   }
 
   return [
     '.env.example을 복사해 프로젝트 루트에 .env를 만듭니다.',
-    'Google Cloud Console에서 OAuth 웹 클라이언트 ID를 발급합니다.',
-    '승인된 JavaScript 원본에 http://localhost:5173 을 추가합니다.',
+    'Google Cloud Console에서 Drive·Docs·Calendar API를 사용 설정합니다.',
+    'OAuth 웹 클라이언트 ID를 발급하고 승인된 JavaScript 원본에 http://localhost:5173 을 추가합니다.',
     'VITE_GOOGLE_CLIENT_ID에 Client ID를 넣고 npm run dev를 재시작합니다.',
   ];
 }
@@ -89,6 +89,65 @@ export function createAuthExpiredError() {
   const err = new Error('세션이 만료되었습니다. Google 다시 로그인해 주세요.');
   err.code = AUTH_EXPIRED;
   return err;
+}
+
+/**
+ * Google API 원문 오류를 사용자용 한국어 안내로 바꿉니다.
+ * @returns {{ message: string, helpUrl: string | null, code?: string }}
+ */
+export function formatGoogleApiError(err) {
+  const raw = err?.message || String(err || '알 수 없는 오류');
+  const disabled =
+    /has not been used in project|is disabled|accessNotConfigured|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(
+      raw
+    );
+
+  const projectMatch =
+    raw.match(/[?&]project=(\d+)/i) ||
+    raw.match(/project[/ ](\d+)/i) ||
+    raw.match(/project (\d+)/i);
+  const projectId = projectMatch?.[1] || '';
+
+  if (
+    disabled &&
+    /calendar-json\.googleapis\.com|Google Calendar API/i.test(raw)
+  ) {
+    const helpUrl = projectId
+      ? `https://console.developers.google.com/apis/api/calendar-json.googleapis.com/overview?project=${projectId}`
+      : 'https://console.cloud.google.com/apis/library/calendar-json.googleapis.com';
+    return {
+      message:
+        'Google Calendar API가 Cloud 프로젝트에서 켜져 있지 않습니다. 아래 링크에서 API를 사용 설정한 뒤 1~2분 기다렸다가 다시 시도해 주세요.',
+      helpUrl,
+      code: 'API_NOT_ENABLED',
+    };
+  }
+
+  if (disabled && /docs\.googleapis\.com|Google Docs API/i.test(raw)) {
+    const helpUrl = projectId
+      ? `https://console.developers.google.com/apis/api/docs.googleapis.com/overview?project=${projectId}`
+      : 'https://console.cloud.google.com/apis/library/docs.googleapis.com';
+    return {
+      message:
+        'Google Docs API가 Cloud 프로젝트에서 켜져 있지 않습니다. 아래 링크에서 API를 사용 설정한 뒤 다시 시도해 주세요.',
+      helpUrl,
+      code: 'API_NOT_ENABLED',
+    };
+  }
+
+  if (disabled && /drive\.googleapis\.com|Google Drive API/i.test(raw)) {
+    const helpUrl = projectId
+      ? `https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=${projectId}`
+      : 'https://console.cloud.google.com/apis/library/drive.googleapis.com';
+    return {
+      message:
+        'Google Drive API가 Cloud 프로젝트에서 켜져 있지 않습니다. 아래 링크에서 API를 사용 설정한 뒤 다시 시도해 주세요.',
+      helpUrl,
+      code: 'API_NOT_ENABLED',
+    };
+  }
+
+  return { message: raw, helpUrl: null };
 }
 
 export function onSignOut(listener) {
