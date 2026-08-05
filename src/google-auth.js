@@ -1,7 +1,8 @@
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/documents',
-  'https://www.googleapis.com/auth/calendar.events',
+  // calendars.get/patch(라벨) + events 에 필요 (events만으로는 라벨 메타를 못 읽음)
+  'https://www.googleapis.com/auth/calendar',
 ].join(' ');
 
 const AUTH_EXPIRED = 'AUTH_EXPIRED';
@@ -116,8 +117,8 @@ function hasCalendarScope(scopeStr) {
   const scopes = String(scopeStr || '').split(/[\s,]+/).filter(Boolean);
   return scopes.some(
     (scope) =>
-      scope === 'https://www.googleapis.com/auth/calendar.events' ||
       scope === 'https://www.googleapis.com/auth/calendar' ||
+      scope === 'https://www.googleapis.com/auth/calendar.events' ||
       scope === 'https://www.googleapis.com/auth/calendar.readonly'
   );
 }

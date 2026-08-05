@@ -3,12 +3,23 @@ import {
   apiFetch,
   createAuthExpiredError,
   isAuthenticated,
+  onSignOut,
 } from './google-auth.js';
 
 const CALENDAR_ID = 'primary';
 const TIMEBOX_ORIGIN = 'timebox4';
 const TIME_SLOTS = generateTimeSlots(5, 24);
 const SLOT_MINUTES = 30;
+/** Google Calendar 이벤트 색상 라벨 이름 (Time Insights 라벨) */
+const EVENT_LABEL_NAME = 'Privacy';
+const LEGACY_EVENT_LABEL_NAME = 'Money';
+const EVENT_LABEL_FALLBACK_COLOR = '#8e24aa';
+
+let cachedPrivacyLabelId = null;
+
+onSignOut(() => {
+  cachedPrivacyLabelId = null;
+});
 
 function getTimeZone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -108,6 +119,84 @@ export function mergeTimelineToBlocks(dateISO, timeline) {
   return blocks;
 }
 
+function eventsUrl(eventId) {
+  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}/events`;
+  const path = eventId ? `${base}/${encodeURIComponent(eventId)}` : base;
+  return `${path}?eventLabelVersion=1`;
+}
+
+function findLabelByName(labels, name) {
+  const target = String(name || '')
+    .trim()
+    .toLowerCase();
+  return labels.find(
+    (label) =>
+      String(label?.name || '')
+        .trim()
+        .toLowerCase() === target
+  );
+}
+
+/**
+ * Privacy 라벨 ID를 반환합니다.
+ * - Privacy가 있으면 그대로 사용
+ * - 없고 Money만 있으면 Money → Privacy 로 이름 변경
+ * - 둘 다 없으면 Privacy 라벨 생성
+ */
+async function ensurePrivacyLabelId() {
+  if (cachedPrivacyLabelId) return cachedPrivacyLabelId;
+
+  const calendar = await apiFetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}`
+  );
+  const labels = Array.isArray(calendar?.labelProperties?.eventLabels)
+    ? [...calendar.labelProperties.eventLabels]
+    : [];
+
+  const privacy = findLabelByName(labels, EVENT_LABEL_NAME);
+  if (privacy?.id) {
+    cachedPrivacyLabelId = privacy.id;
+    return cachedPrivacyLabelId;
+  }
+
+  const money = findLabelByName(labels, LEGACY_EVENT_LABEL_NAME);
+  let nextLabels;
+  let labelId;
+
+  if (money?.id) {
+    labelId = money.id;
+    nextLabels = labels.map((label) =>
+      label.id === money.id ? { ...label, name: EVENT_LABEL_NAME } : label
+    );
+  } else {
+    labelId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `tb4-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+    nextLabels = [
+      ...labels,
+      {
+        id: labelId,
+        backgroundColor: EVENT_LABEL_FALLBACK_COLOR,
+        name: EVENT_LABEL_NAME,
+      },
+    ];
+  }
+
+  await apiFetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        labelProperties: { eventLabels: nextLabels },
+      }),
+    }
+  );
+
+  cachedPrivacyLabelId = labelId;
+  return cachedPrivacyLabelId;
+}
+
 async function listDayEvents(dateISO, { ownedOnly = false } = {}) {
   const { timeMin, timeMax } = dayRange(dateISO);
   const params = new URLSearchParams({
@@ -116,6 +205,7 @@ async function listDayEvents(dateISO, { ownedOnly = false } = {}) {
     maxResults: '2500',
     timeMin,
     timeMax,
+    eventLabelVersion: '1',
   });
 
   if (ownedOnly) {
@@ -129,9 +219,9 @@ async function listDayEvents(dateISO, { ownedOnly = false } = {}) {
   return data?.items || [];
 }
 
-function buildEventBody(dateISO, block) {
+function buildEventBody(dateISO, block, eventLabelId) {
   const timeZone = getTimeZone();
-  return {
+  const body = {
     summary: block.summary,
     start: { dateTime: block.startRfc, timeZone },
     end: { dateTime: block.endRfc, timeZone },
@@ -142,6 +232,10 @@ function buildEventBody(dateISO, block) {
       },
     },
   };
+  if (eventLabelId) {
+    body.eventLabelId = eventLabelId;
+  }
+  return body;
 }
 
 function isAllDayEvent(event) {
@@ -340,6 +434,7 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
     throw createAuthExpiredError();
   }
 
+  const privacyLabelId = await ensurePrivacyLabelId();
   const blocks = mergeTimelineToBlocks(dateISO, timeline);
   const { owned, allEvents } = await listPushContext(dateISO);
   const unusedOwned = new Set(owned.map((event) => event.id).filter(Boolean));
@@ -352,7 +447,7 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
   let skipped = 0;
 
   for (const block of blocks) {
-    const body = buildEventBody(dateISO, block);
+    const body = buildEventBody(dateISO, block, privacyLabelId);
     const match = findExistingMatch(block, allEvents, claimedIds);
 
     if (match) {
@@ -366,14 +461,15 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
           range &&
           sameInstant(range.start, block.start) &&
           sameInstant(range.end, block.end);
+        const sameLabel = match.eventLabelId === privacyLabelId;
 
-        if (sameSummary && sameRange) {
+        if (sameSummary && sameRange && sameLabel) {
           unchanged += 1;
         } else {
-          await apiFetch(
-            `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}/events/${encodeURIComponent(match.id)}`,
-            { method: 'PATCH', body: JSON.stringify(body) }
-          );
+          await apiFetch(eventsUrl(match.id), {
+            method: 'PATCH',
+            body: JSON.stringify(body),
+          });
           updated += 1;
         }
       } else {
@@ -383,10 +479,10 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
       continue;
     }
 
-    await apiFetch(
-      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}/events`,
-      { method: 'POST', body: JSON.stringify(body) }
-    );
+    await apiFetch(eventsUrl(), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
     created += 1;
   }
 
