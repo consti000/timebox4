@@ -18,6 +18,7 @@ export {
   initGoogleAuth,
   signIn,
   signOut,
+  resignInWithCalendarConsent,
 } from './google-auth.js';
 
 const FOLDER_NAME = 'TimeBox4 Planner';

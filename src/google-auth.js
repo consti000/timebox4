@@ -87,7 +87,8 @@ export function isAuthExpiredError(err) {
 export function isScopeError(err) {
   if (err?.code === SCOPE_INSUFFICIENT) return true;
   const raw = err?.message || '';
-  return /ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|PERMISSION_DENIED|Request had insufficient authentication scopes/i.test(
+  // PERMISSION_DENIED는 API 미활성 등에도 쓰이므로 스코프 오류로 쓰지 않음
+  return /ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|Request had insufficient authentication scopes/i.test(
     raw
   );
 }
@@ -116,7 +117,8 @@ function hasCalendarScope(scopeStr) {
   return scopes.some(
     (scope) =>
       scope === 'https://www.googleapis.com/auth/calendar.events' ||
-      scope === 'https://www.googleapis.com/auth/calendar'
+      scope === 'https://www.googleapis.com/auth/calendar' ||
+      scope === 'https://www.googleapis.com/auth/calendar.readonly'
   );
 }
 
@@ -127,10 +129,10 @@ function hasCalendarScope(scopeStr) {
 export function formatGoogleApiError(err) {
   const raw = err?.message || String(err || '알 수 없는 오류');
 
-  if (isScopeError(err) || /ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(raw)) {
+  if (err?.code === SCOPE_INSUFFICIENT || /ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(raw)) {
     return {
       message:
-        '이 브라우저/계정에는 캘린더 권한이 없습니다. Google 로그아웃 후 다시 로그인할 때 캘린더 권한에 동의해 주세요. (모바일에서만 되는 경우, 노트북에서 예전에 Docs만 허용한 로그인일 때가 많습니다.)',
+        '이 브라우저에는 캘린더 권한이 없습니다. 아래 「권한 허용 후 다시 시도」를 누르고, 동의 화면에서 Google Calendar를 허용해 주세요.',
       helpUrl: null,
       code: SCOPE_INSUFFICIENT,
     };
@@ -139,7 +141,7 @@ export function formatGoogleApiError(err) {
   if (/origin_mismatch|The given origin is not allowed/i.test(raw)) {
     return {
       message:
-        '접속 주소가 Google OAuth 허용 목록과 다릅니다. localhost는 http://localhost:5173 으로 열어 주세요. (127.0.0.1 은 실패할 수 있습니다.)',
+        '접속 주소가 Google OAuth 허용 목록과 다릅니다. http://localhost:5173 으로 열어 주세요. (127.0.0.1 은 실패합니다.)',
       helpUrl: 'https://console.cloud.google.com/apis/credentials',
       code: 'ORIGIN_MISMATCH',
     };
@@ -190,6 +192,21 @@ export function formatGoogleApiError(err) {
         'Google Drive API가 Cloud 프로젝트에서 켜져 있지 않습니다. 아래 링크에서 API를 사용 설정한 뒤 다시 시도해 주세요.',
       helpUrl,
       code: 'API_NOT_ENABLED',
+    };
+  }
+
+  // PERMISSION_DENIED + calendar API disabled message variants
+  if (
+    /PERMISSION_DENIED/i.test(raw) &&
+    /calendar/i.test(raw) &&
+    /API/i.test(raw)
+  ) {
+    return {
+      message:
+        '캘린더 API 권한이 거부되었습니다. Cloud Console에서 Calendar API 사용 설정과 OAuth 동의(캘린더)를 확인해 주세요.',
+      helpUrl:
+        'https://console.cloud.google.com/apis/library/calendar-json.googleapis.com',
+      code: 'PERMISSION_DENIED',
     };
   }
 
@@ -263,8 +280,9 @@ export function signIn(options = {}) {
         return;
       }
       accessToken = response.access_token;
-      grantedScope = response.scope || SCOPES;
-      if (!hasCalendarScope(grantedScope)) {
+      // scope가 비어 있으면 GIS가 생략한 경우일 수 있어 API로 검증한다
+      grantedScope = response.scope || '';
+      if (grantedScope && !hasCalendarScope(grantedScope)) {
         accessToken = null;
         grantedScope = '';
         reject(createScopeError());
@@ -272,11 +290,24 @@ export function signIn(options = {}) {
       }
       resolve();
     };
-    // 노트북에 남은 예전 권한(Docs만)을 갱신하려면 consent가 필요
     tokenClient.requestAccessToken({
-      prompt: forceConsent || !accessToken ? 'consent' : '',
+      prompt: forceConsent ? 'consent' : '',
     });
   });
+}
+
+/** 기존 토큰을 폐기하고 캘린더 포함 동의를 다시 받습니다. */
+export async function resignInWithCalendarConsent() {
+  if (accessToken && window.google?.accounts?.oauth2) {
+    try {
+      window.google.accounts.oauth2.revoke(accessToken);
+    } catch {
+      // ignore revoke errors
+    }
+  }
+  accessToken = null;
+  grantedScope = '';
+  await signIn({ forceConsent: true });
 }
 
 export function signOut() {
@@ -339,9 +370,10 @@ export async function apiFetch(url, options = {}, retryCount = 0) {
       return apiFetch(url, options, retryCount + 1);
     }
 
+    // PERMISSION_DENIED 전체를 스코프 오류로 취급하지 않음 (API 미활성과 구분)
     if (
       res.status === 403 &&
-      /ACCESS_TOKEN_SCOPE_INSUFFICIENT|PERMISSION_DENIED|insufficient authentication scopes/i.test(
+      /ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(
         combined
       )
     ) {

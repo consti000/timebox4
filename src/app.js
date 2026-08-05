@@ -20,6 +20,7 @@ import {
   initGoogleAuth,
   signIn,
   signOut,
+  resignInWithCalendarConsent,
   saveToGoogleDocs,
 } from './google-drive.js';
 import {
@@ -179,13 +180,69 @@ async function syncToGoogle() {
   }
 }
 
-async function reauthForCalendar() {
-  showToast('캘린더 권한 동의가 필요합니다. 팝업에서 허용해 주세요.');
-  await signIn({ forceConsent: true });
+/**
+ * 클릭 직후(사용자 제스처 안)에서만 토큰을 조용히 갱신합니다.
+ * 노트북은 API 실패 뒤 늦게 consent 팝업을 띄우면 차단되는 경우가 많습니다.
+ */
+async function refreshTokenInUserGesture() {
+  await signIn({ forceConsent: false });
   updateGoogleButton();
 }
 
-async function pullFromCalendar(isRetry = false) {
+function showCalendarScopeRecovery(action) {
+  const formatted = formatGoogleApiError(
+    Object.assign(new Error('캘린더 권한 부족'), { code: 'SCOPE_INSUFFICIENT' })
+  );
+  setSaveIndicator('', '캘린더 권한 필요');
+  els.syncStatus.hidden = false;
+  els.syncStatus.className = 'sync-status error';
+  els.syncStatus.replaceChildren();
+  els.syncStatus.append(`❌ ${formatted.message} `);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-primary sync-reauth-btn';
+  btn.textContent = '권한 허용 후 다시 시도';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      showToast('동의 화면에서 Google Calendar를 허용해 주세요.');
+      await resignInWithCalendarConsent();
+      updateGoogleButton();
+      const result =
+        action === 'push' ? await pushToCalendar() : await pullFromCalendar();
+      if (result.ok) {
+        if (action === 'pull') {
+          const parts = [];
+          if (result.filled > 0) parts.push(`슬롯 ${result.filled}개`);
+          if (result.todosAdded > 0) parts.push(`할 일 ${result.todosAdded}건`);
+          showToast(
+            parts.length > 0
+              ? `캘린더에서 ${parts.join(', ')}을(를) 반영했습니다.`
+              : '반영할 새 일정이 없습니다.',
+            'success'
+          );
+        } else {
+          showToast(
+            `캘린더에 반영했습니다. (생성 ${result.created}, 수정 ${result.updated}, 삭제 ${result.deleted})`,
+            'success'
+          );
+        }
+      } else if (result.reason === 'error' || result.reason === 'scope') {
+        showToast(result.message || '캘린더 동기화에 실패했습니다.', 'error');
+      }
+    } catch (authErr) {
+      const f = showSyncError(authErr);
+      showToast(f.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  els.syncStatus.appendChild(btn);
+  return formatted;
+}
+
+async function pullFromCalendar() {
   if (!requireGoogleReady('불러오기')) {
     return { ok: false, reason: 'blocked' };
   }
@@ -195,6 +252,8 @@ async function pullFromCalendar(isRetry = false) {
   setSaveIndicator('saving', '캘린더 불러오는 중...');
 
   try {
+    await refreshTokenInUserGesture();
+
     const snapshot = { ...dayData.timeline };
     const result = await pullDayToTimeline(
       currentDate,
@@ -232,19 +291,9 @@ async function pullFromCalendar(isRetry = false) {
       eventCount: result.eventCount,
     };
   } catch (err) {
-    if ((isAuthExpiredError(err) || isScopeError(err)) && !isRetry) {
-      calendarAction = null;
-      updateGoogleButton();
-      try {
-        await reauthForCalendar();
-        return await pullFromCalendar(true);
-      } catch (authErr) {
-        handleAuthExpired();
-        const formatted = showSyncError(
-          isScopeError(err) || isScopeError(authErr) ? err : authErr
-        );
-        return { ok: false, reason: 'error', message: formatted.message };
-      }
+    if (isScopeError(err)) {
+      const formatted = showCalendarScopeRecovery('pull');
+      return { ok: false, reason: 'scope', message: formatted.message };
     }
     if (isAuthExpiredError(err)) {
       handleAuthExpired();
@@ -258,7 +307,7 @@ async function pullFromCalendar(isRetry = false) {
   }
 }
 
-async function pushToCalendar(isRetry = false) {
+async function pushToCalendar() {
   if (!requireGoogleReady('보내기')) {
     return { ok: false, reason: 'blocked' };
   }
@@ -268,6 +317,8 @@ async function pushToCalendar(isRetry = false) {
   setSaveIndicator('saving', '캘린더로 보내는 중...');
 
   try {
+    await refreshTokenInUserGesture();
+
     debouncedPersist.cancel?.();
     persistLocal();
     const result = await pushTimelineToCalendar(currentDate, dayData.timeline);
@@ -288,19 +339,9 @@ async function pushToCalendar(isRetry = false) {
     );
     return { ok: true, ...result };
   } catch (err) {
-    if ((isAuthExpiredError(err) || isScopeError(err)) && !isRetry) {
-      calendarAction = null;
-      updateGoogleButton();
-      try {
-        await reauthForCalendar();
-        return await pushToCalendar(true);
-      } catch (authErr) {
-        handleAuthExpired();
-        const formatted = showSyncError(
-          isScopeError(err) || isScopeError(authErr) ? err : authErr
-        );
-        return { ok: false, reason: 'error', message: formatted.message };
-      }
+    if (isScopeError(err)) {
+      const formatted = showCalendarScopeRecovery('push');
+      return { ok: false, reason: 'scope', message: formatted.message };
     }
     if (isAuthExpiredError(err)) {
       handleAuthExpired();
@@ -623,6 +664,8 @@ function bindEvents() {
           : '반영할 새 일정이 없습니다.',
         'success'
       );
+    } else if (result.reason === 'scope') {
+      showToast('캘린더 권한이 필요합니다. 아래 버튼을 눌러 허용해 주세요.', 'error');
     } else if (result.reason === 'error') {
       showToast(result.message || '캘린더 불러오기에 실패했습니다.', 'error');
     }
@@ -635,6 +678,8 @@ function bindEvents() {
         `캘린더에 반영했습니다. (생성 ${result.created}, 수정 ${result.updated}, 삭제 ${result.deleted})`,
         'success'
       );
+    } else if (result.reason === 'scope') {
+      showToast('캘린더 권한이 필요합니다. 아래 버튼을 눌러 허용해 주세요.', 'error');
     } else if (result.reason === 'error') {
       showToast(result.message || '캘린더 보내기에 실패했습니다.', 'error');
     }

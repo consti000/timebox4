@@ -536,6 +536,15 @@ body {
   color: var(--danger);
 }
 
+.sync-status .sync-reauth-btn {
+  display: inline-block;
+  margin-left: 0.35rem;
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  vertical-align: middle;
+}
+
 .toast {
   position: fixed;
   bottom: 3.5rem;
