@@ -232,16 +232,18 @@ export async function apiFetch(url, options = {}, retryCount = 0) {
     throw createAuthExpiredError();
   }
 
+  const { responseType, ...fetchOptions } = options;
+
   const headers = {
     Authorization: `Bearer ${accessToken}`,
-    ...options.headers,
+    ...fetchOptions.headers,
   };
-  if (options.body != null && headers['Content-Type'] == null) {
+  if (fetchOptions.body != null && headers['Content-Type'] == null) {
     headers['Content-Type'] = 'application/json';
   }
 
   const res = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
@@ -262,5 +264,8 @@ export async function apiFetch(url, options = {}, retryCount = 0) {
   }
 
   if (res.status === 204) return null;
+  if (responseType === 'text') {
+    return res.text();
+  }
   return res.json();
 }

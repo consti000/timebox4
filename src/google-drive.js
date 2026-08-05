@@ -309,26 +309,96 @@ async function insertPageBreaksBetweenDates(docId, dateISOs) {
 }
 
 /**
- * 9일 자료를 하나의 HTML로 만들고 Drive multipart 업로드로
- * Google Doc 본문을 한 번에 교체합니다 (Docs API 표 삽입 반복 대비 대폭 빠름).
+ * Docs에 이미 있는 날짜 섹션을 HTML에서 추출합니다.
+ * @returns {Map<string, string>} dateISO → 섹션 HTML 조각
  */
-function buildJournalHtml(entries) {
-  const sections = entries.map((entry, index) => {
-    // Drive HTML 변환용 힌트(실제 분리는 insertPageBreaksBetweenDates가 담당)
+function extractExistingSectionsFromHtml(html) {
+  const map = new Map();
+  if (!html || typeof html !== 'string') return map;
+
+  const startRe = /\[\[TIMEBOX_START:(\d{4}-\d{2}-\d{2})\]\]/g;
+  const matches = [...html.matchAll(startRe)];
+
+  for (const match of matches) {
+    const dateISO = match[1];
+    const startMarkerPos = match.index ?? -1;
+    if (startMarkerPos < 0) continue;
+
+    const endMarker = sectionEndMarker(dateISO);
+    const endMarkerPos = html.indexOf(endMarker, startMarkerPos);
+    if (endMarkerPos === -1) continue;
+
+    let from = startMarkerPos;
+    for (let i = startMarkerPos; i >= 0 && startMarkerPos - i < 800; i -= 1) {
+      if (
+        html.startsWith('<p', i) ||
+        html.startsWith('<h1', i) ||
+        html.startsWith('<div', i)
+      ) {
+        from = i;
+        break;
+      }
+    }
+
+    let to = endMarkerPos + endMarker.length;
+    const closeP = html.indexOf('</p>', to);
+    if (closeP !== -1 && closeP - to < 40) {
+      to = closeP + 4;
+    }
+
+    let fragment = html.slice(from, to).trim();
+    fragment = fragment.replace(/^(?:<hr\b[^>]*>\s*)+/i, '');
+    if (fragment) {
+      map.set(dateISO, fragment);
+    }
+  }
+
+  return map;
+}
+
+async function exportDocumentHtml(docId) {
+  try {
+    return await apiFetch(
+      `https://www.googleapis.com/drive/v3/files/${docId}/export?mimeType=${encodeURIComponent('text/html')}`,
+      { responseType: 'text' }
+    );
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 화면 날짜는 새 내용으로 덮어쓰고, Docs에만 있는 이전 날짜 섹션은 그대로 유지합니다.
+ */
+function buildMergedJournalHtml(entries, existingSections) {
+  const sectionMap = new Map(existingSections);
+
+  for (const { dateISO, data } of entries) {
+    sectionMap.set(dateISO, buildDateSectionHtml(dateISO, data));
+  }
+
+  const dates = [...sectionMap.keys()].sort((a, b) => a.localeCompare(b));
+  const parts = dates.map((dateISO, index) => {
     const pageBreakHint =
       index > 0
         ? '<hr style="page-break-before:always;border:none;margin:0;height:0">\n'
         : '';
-    return pageBreakHint + buildDateSectionHtml(entry.dateISO, entry.data);
+    return pageBreakHint + sectionMap.get(dateISO);
   });
 
-  return `<!DOCTYPE html>
+  return {
+    html: `<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><title>Timebox Planner Journal</title></head>
 <body>
-${sections.join('\n')}
+${parts.join('\n')}
 </body>
-</html>`;
+</html>`,
+    dates,
+    preservedDates: dates.filter(
+      (dateISO) => !entries.some((entry) => entry.dateISO === dateISO)
+    ),
+  };
 }
 
 async function replaceDocumentWithHtml(docId, html) {
@@ -363,8 +433,8 @@ async function getDocument(docId) {
 }
 
 /**
- * 화면(또는 전달된) 날짜들의 최종 스냅샷만 Docs에 기록합니다.
- * HTML 변환 업로드로 전체 문서를 한 번에 교체한 뒤, 날짜별 페이지 나누기를 적용합니다.
+ * 화면 날짜 스트립 자료를 Docs에 반영합니다.
+ * 문서에 이미 있는 스트립 밖(오래된) 날짜 섹션은 유지하고, 스트립 날짜만 최신으로 덮어씁니다.
  * @param {Array<{ dateISO: string, data: object }>} entries
  */
 export async function saveToGoogleDocs(entries) {
@@ -377,19 +447,24 @@ export async function saveToGoogleDocs(entries) {
     throw new Error('저장할 날짜 자료가 없습니다.');
   }
 
-  const sorted = [...list].sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+  const sortedEntries = [...list].sort((a, b) =>
+    a.dateISO.localeCompare(b.dateISO)
+  );
   const docId = await resolveMasterDoc();
-  const html = buildJournalHtml(sorted);
+
+  const existingHtml = await exportDocumentHtml(docId);
+  const existingSections = extractExistingSectionsFromHtml(existingHtml);
+  const { html, dates, preservedDates } = buildMergedJournalHtml(
+    sortedEntries,
+    existingSections
+  );
 
   await replaceDocumentWithHtml(docId, html);
-  await insertPageBreaksBetweenDates(
-    docId,
-    sorted.map((entry) => entry.dateISO)
-  );
+  await insertPageBreaksBetweenDates(docId, dates);
 
   const finalDoc = await getDocument(docId);
   const raw = JSON.stringify(finalDoc.body || {});
-  for (const { dateISO } of sorted) {
+  for (const { dateISO } of sortedEntries) {
     if (
       !raw.includes(sectionStartMarker(dateISO)) ||
       !raw.includes(sectionEndMarker(dateISO)) ||
@@ -404,6 +479,8 @@ export async function saveToGoogleDocs(entries) {
   return {
     docId,
     url: `https://docs.google.com/document/d/${docId}/edit`,
-    savedDates: sorted.map((entry) => entry.dateISO),
+    savedDates: sortedEntries.map((entry) => entry.dateISO),
+    preservedDates,
+    totalDates: dates,
   };
 }

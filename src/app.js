@@ -148,7 +148,13 @@ async function syncToGoogle() {
     link.rel = 'noopener';
     link.textContent = '통합 문서 열기';
     const count = result.savedDates?.length ?? entries.length;
-    els.syncStatus.append(`✅ ${count}일 재작성·날짜순 저장됨 — `, link);
+    const preserved = result.preservedDates?.length ?? 0;
+    const preservedMsg =
+      preserved > 0 ? ` · 이전 ${preserved}일 유지` : '';
+    els.syncStatus.append(
+      `✅ 화면 ${count}일 갱신${preservedMsg} · 날짜순 저장 — `,
+      link
+    );
     return { ok: true, url: result.url };
   } catch (err) {
     if (isAuthExpiredError(err)) {
@@ -562,7 +568,7 @@ function bindEvents() {
 
     const result = await syncToGoogle();
     if (result.ok) {
-      showToast('Journal(v3)에 화면 날짜 자료를 날짜순으로 다시 저장했습니다.', 'success');
+      showToast('화면 날짜는 갱신하고, Docs의 이전 날짜 기록은 유지한 채 저장했습니다.', 'success');
     } else if (result.reason === 'busy') {
       showToast('저장 중입니다. 잠시 후 최신 내용이 반영됩니다.');
     } else if (result.reason === 'error') {
