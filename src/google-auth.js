@@ -5,11 +5,13 @@ const SCOPES = [
 ].join(' ');
 
 const AUTH_EXPIRED = 'AUTH_EXPIRED';
+const SCOPE_INSUFFICIENT = 'SCOPE_INSUFFICIENT';
 const QUOTA_RETRY_DELAY_MS = 45000;
 const QUOTA_MAX_RETRIES = 2;
 const PLACEHOLDER_CLIENT_ID = 'your-client-id.apps.googleusercontent.com';
 
 let accessToken = null;
+let grantedScope = '';
 let tokenClient = null;
 const signOutListeners = new Set();
 
@@ -68,8 +70,9 @@ export function getGoogleSetupSteps() {
   return [
     '.env.example을 복사해 프로젝트 루트에 .env를 만듭니다.',
     'Google Cloud Console에서 Drive·Docs·Calendar API를 사용 설정합니다.',
-    'OAuth 웹 클라이언트 ID를 발급하고 승인된 JavaScript 원본에 http://localhost:5173 을 추가합니다.',
+    'OAuth 웹 클라이언트 ID를 발급하고 승인된 JavaScript 원본에 http://localhost:5173 을 추가합니다. (127.0.0.1 사용 금지)',
     'VITE_GOOGLE_CLIENT_ID에 Client ID를 넣고 npm run dev를 재시작합니다.',
+    '캘린더가 안 되면 Google 로그아웃 후 다시 로그인하며 캘린더 권한에 동의하세요.',
   ];
 }
 
@@ -79,6 +82,14 @@ export function isAuthenticated() {
 
 export function isAuthExpiredError(err) {
   return Boolean(err && err.code === AUTH_EXPIRED);
+}
+
+export function isScopeError(err) {
+  if (err?.code === SCOPE_INSUFFICIENT) return true;
+  const raw = err?.message || '';
+  return /ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|PERMISSION_DENIED|Request had insufficient authentication scopes/i.test(
+    raw
+  );
 }
 
 export function isQuotaError(err) {
@@ -91,16 +102,51 @@ export function createAuthExpiredError() {
   return err;
 }
 
+export function createScopeError(message) {
+  const err = new Error(
+    message ||
+      '캘린더 권한이 없습니다. Google 로그아웃 후 다시 로그인하면서 캘린더 접근을 허용해 주세요.'
+  );
+  err.code = SCOPE_INSUFFICIENT;
+  return err;
+}
+
+function hasCalendarScope(scopeStr) {
+  const scopes = String(scopeStr || '').split(/[\s,]+/).filter(Boolean);
+  return scopes.some(
+    (scope) =>
+      scope === 'https://www.googleapis.com/auth/calendar.events' ||
+      scope === 'https://www.googleapis.com/auth/calendar'
+  );
+}
+
 /**
  * Google API 원문 오류를 사용자용 한국어 안내로 바꿉니다.
  * @returns {{ message: string, helpUrl: string | null, code?: string }}
  */
 export function formatGoogleApiError(err) {
   const raw = err?.message || String(err || '알 수 없는 오류');
-  const disabled =
-    /has not been used in project|is disabled|accessNotConfigured|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(
-      raw
-    );
+
+  if (isScopeError(err) || /ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(raw)) {
+    return {
+      message:
+        '이 브라우저/계정에는 캘린더 권한이 없습니다. Google 로그아웃 후 다시 로그인할 때 캘린더 권한에 동의해 주세요. (모바일에서만 되는 경우, 노트북에서 예전에 Docs만 허용한 로그인일 때가 많습니다.)',
+      helpUrl: null,
+      code: SCOPE_INSUFFICIENT,
+    };
+  }
+
+  if (/origin_mismatch|The given origin is not allowed/i.test(raw)) {
+    return {
+      message:
+        '접속 주소가 Google OAuth 허용 목록과 다릅니다. localhost는 http://localhost:5173 으로 열어 주세요. (127.0.0.1 은 실패할 수 있습니다.)',
+      helpUrl: 'https://console.cloud.google.com/apis/credentials',
+      code: 'ORIGIN_MISMATCH',
+    };
+  }
+
+  const apiDisabled =
+    /has not been used in project|is disabled|accessNotConfigured/i.test(raw);
 
   const projectMatch =
     raw.match(/[?&]project=(\d+)/i) ||
@@ -109,7 +155,7 @@ export function formatGoogleApiError(err) {
   const projectId = projectMatch?.[1] || '';
 
   if (
-    disabled &&
+    apiDisabled &&
     /calendar-json\.googleapis\.com|Google Calendar API/i.test(raw)
   ) {
     const helpUrl = projectId
@@ -123,7 +169,7 @@ export function formatGoogleApiError(err) {
     };
   }
 
-  if (disabled && /docs\.googleapis\.com|Google Docs API/i.test(raw)) {
+  if (apiDisabled && /docs\.googleapis\.com|Google Docs API/i.test(raw)) {
     const helpUrl = projectId
       ? `https://console.developers.google.com/apis/api/docs.googleapis.com/overview?project=${projectId}`
       : 'https://console.cloud.google.com/apis/library/docs.googleapis.com';
@@ -135,7 +181,7 @@ export function formatGoogleApiError(err) {
     };
   }
 
-  if (disabled && /drive\.googleapis\.com|Google Drive API/i.test(raw)) {
+  if (apiDisabled && /drive\.googleapis\.com|Google Drive API/i.test(raw)) {
     const helpUrl = projectId
       ? `https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=${projectId}`
       : 'https://console.cloud.google.com/apis/library/drive.googleapis.com';
@@ -144,6 +190,15 @@ export function formatGoogleApiError(err) {
         'Google Drive API가 Cloud 프로젝트에서 켜져 있지 않습니다. 아래 링크에서 API를 사용 설정한 뒤 다시 시도해 주세요.',
       helpUrl,
       code: 'API_NOT_ENABLED',
+    };
+  }
+
+  if (/Failed to fetch|NetworkError|Load failed|network/i.test(raw)) {
+    return {
+      message:
+        '네트워크 오류로 Google에 연결하지 못했습니다. 광고 차단/추적 방지 확장 프로그램을 끄거나, 시크릿 창에서 다시 시도해 주세요.',
+      helpUrl: null,
+      code: 'NETWORK',
     };
   }
 
@@ -183,6 +238,7 @@ export function initGoogleAuth(onSuccess, onError) {
           return;
         }
         accessToken = response.access_token;
+        grantedScope = response.scope || SCOPES;
         onSuccess?.();
       },
     });
@@ -191,7 +247,11 @@ export function initGoogleAuth(onSuccess, onError) {
   tryInit();
 }
 
-export function signIn() {
+/**
+ * @param {{ forceConsent?: boolean }} [options]
+ */
+export function signIn(options = {}) {
+  const forceConsent = Boolean(options.forceConsent);
   return new Promise((resolve, reject) => {
     if (!tokenClient) {
       reject(new Error('Google 인증이 초기화되지 않았습니다.'));
@@ -203,9 +263,19 @@ export function signIn() {
         return;
       }
       accessToken = response.access_token;
+      grantedScope = response.scope || SCOPES;
+      if (!hasCalendarScope(grantedScope)) {
+        accessToken = null;
+        grantedScope = '';
+        reject(createScopeError());
+        return;
+      }
       resolve();
     };
-    tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });
+    // 노트북에 남은 예전 권한(Docs만)을 갱신하려면 consent가 필요
+    tokenClient.requestAccessToken({
+      prompt: forceConsent || !accessToken ? 'consent' : '',
+    });
   });
 }
 
@@ -214,6 +284,7 @@ export function signOut() {
     window.google.accounts.oauth2.revoke(accessToken);
   }
   accessToken = null;
+  grantedScope = '';
   for (const listener of signOutListeners) {
     try {
       listener();
@@ -242,22 +313,39 @@ export async function apiFetch(url, options = {}, retryCount = 0) {
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(url, {
-    ...fetchOptions,
-    headers,
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      ...fetchOptions,
+      headers,
+    });
+  } catch (networkErr) {
+    throw new Error(networkErr?.message || 'Failed to fetch');
+  }
 
   if (!res.ok) {
     if (res.status === 401) {
       accessToken = null;
+      grantedScope = '';
       throw createAuthExpiredError();
     }
     const err = await res.json().catch(() => ({}));
     const message = err.error?.message || `API 오류 (${res.status})`;
+    const status = err.error?.status || '';
+    const combined = `${message} ${status}`;
 
     if (/quota exceeded/i.test(message) && retryCount < QUOTA_MAX_RETRIES) {
       await sleep(QUOTA_RETRY_DELAY_MS);
       return apiFetch(url, options, retryCount + 1);
+    }
+
+    if (
+      res.status === 403 &&
+      /ACCESS_TOKEN_SCOPE_INSUFFICIENT|PERMISSION_DENIED|insufficient authentication scopes/i.test(
+        combined
+      )
+    ) {
+      throw createScopeError(message);
     }
 
     throw new Error(message);

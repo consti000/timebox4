@@ -14,6 +14,7 @@ import {
   getGoogleSetupSteps,
   isAuthenticated,
   isAuthExpiredError,
+  isScopeError,
   isQuotaError,
   formatGoogleApiError,
   initGoogleAuth,
@@ -178,7 +179,13 @@ async function syncToGoogle() {
   }
 }
 
-async function pullFromCalendar() {
+async function reauthForCalendar() {
+  showToast('캘린더 권한 동의가 필요합니다. 팝업에서 허용해 주세요.');
+  await signIn({ forceConsent: true });
+  updateGoogleButton();
+}
+
+async function pullFromCalendar(isRetry = false) {
   if (!requireGoogleReady('불러오기')) {
     return { ok: false, reason: 'blocked' };
   }
@@ -225,6 +232,20 @@ async function pullFromCalendar() {
       eventCount: result.eventCount,
     };
   } catch (err) {
+    if ((isAuthExpiredError(err) || isScopeError(err)) && !isRetry) {
+      calendarAction = null;
+      updateGoogleButton();
+      try {
+        await reauthForCalendar();
+        return await pullFromCalendar(true);
+      } catch (authErr) {
+        handleAuthExpired();
+        const formatted = showSyncError(
+          isScopeError(err) || isScopeError(authErr) ? err : authErr
+        );
+        return { ok: false, reason: 'error', message: formatted.message };
+      }
+    }
     if (isAuthExpiredError(err)) {
       handleAuthExpired();
       return { ok: false, reason: 'auth_expired' };
@@ -237,7 +258,7 @@ async function pullFromCalendar() {
   }
 }
 
-async function pushToCalendar() {
+async function pushToCalendar(isRetry = false) {
   if (!requireGoogleReady('보내기')) {
     return { ok: false, reason: 'blocked' };
   }
@@ -267,6 +288,20 @@ async function pushToCalendar() {
     );
     return { ok: true, ...result };
   } catch (err) {
+    if ((isAuthExpiredError(err) || isScopeError(err)) && !isRetry) {
+      calendarAction = null;
+      updateGoogleButton();
+      try {
+        await reauthForCalendar();
+        return await pushToCalendar(true);
+      } catch (authErr) {
+        handleAuthExpired();
+        const formatted = showSyncError(
+          isScopeError(err) || isScopeError(authErr) ? err : authErr
+        );
+        return { ok: false, reason: 'error', message: formatted.message };
+      }
+    }
     if (isAuthExpiredError(err)) {
       handleAuthExpired();
       return { ok: false, reason: 'auth_expired' };
@@ -552,7 +587,7 @@ function bindEvents() {
     }
 
     try {
-      await signIn();
+      await signIn({ forceConsent: true });
       updateGoogleButton();
       showToast(
         'Google 계정에 연결되었습니다. Docs 저장 또는 캘린더 동기화를 사용할 수 있습니다.',

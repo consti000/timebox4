@@ -12,6 +12,7 @@ export {
   getGoogleSetupSteps,
   isAuthenticated,
   isAuthExpiredError,
+  isScopeError,
   isQuotaError,
   formatGoogleApiError,
   initGoogleAuth,
