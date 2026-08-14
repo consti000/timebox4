@@ -366,7 +366,6 @@ function paragraphAlignmentRequest(range, alignment) {
 function cellVerticalAlignRequest(tableStartIndex, rowIndex, columnIndex) {
   return {
     updateTableCellStyle: {
-      tableStartLocation: { index: tableStartIndex },
       tableRange: {
         tableCellLocation: {
           tableStartLocation: { index: tableStartIndex },

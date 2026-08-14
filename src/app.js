@@ -133,7 +133,7 @@ async function syncToGoogle() {
     debouncedPersist.cancel?.();
     persistLocal();
 
-    const stripDates = dateWindowAround(todayISO(), DATE_STRIP_RADIUS);
+    const stripDates = dateWindowAround(currentDate, DATE_STRIP_RADIUS);
     const entries = stripDates.map((dateISO) => ({
       dateISO,
       data: dateISO === currentDate ? dayData : loadDayData(dateISO),
@@ -481,7 +481,7 @@ function parseLocalDate(iso) {
 
 function renderDateStrip() {
   const today = todayISO();
-  const dates = dateWindowAround(today, DATE_STRIP_RADIUS);
+  const dates = dateWindowAround(currentDate, DATE_STRIP_RADIUS);
 
   els.dateStrip.replaceChildren();
 
