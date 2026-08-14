@@ -32,10 +32,13 @@ const TABLE_HEADER_BG = '#edeef5';
  * 2열 표 첫 열 너비.
  * Docs HTML 변환은 colgroup/%를 무시해 균등(~50%)이 되므로,
  * 업로드 후 Docs API로 FIXED_WIDTH를 적용합니다. (기존 균등폭의 약 25%)
+ * 둘째 열은 (표 전체 너비 − 첫 열)로 확대해 총폭을 유지합니다.
  */
 const NARROW_FIRST_COL_PT = 58;
 const NARROW_FIRST_COL_PCT = 12;
 const WIDE_SECOND_COL_PCT = 88;
+/** 열 너비를 못 읽을 때 쓰는 기본 표 폭 (US Letter 여백≈1" 기준) */
+const DEFAULT_TWO_COL_TABLE_WIDTH_PT = 468;
 
 let folderId = null;
 let masterDocId = null;
@@ -346,8 +349,8 @@ async function insertPageBreaksBetweenDates(docId, dateISOs) {
 }
 
 /**
- * 2열 표(우선순위/상태/시간)의 첫 열을 좁게 고정합니다.
- * HTML width는 Docs 변환에서 무시되는 경우가 많아 batchUpdate로 적용합니다.
+ * 2열 표(우선순위/상태/시간)의 첫 열을 좁히고,
+ * 줄인 만큼 둘째 열을 넓혀 표 전체 너비는 유지합니다.
  */
 async function narrowTwoColumnTableFirstCols(docId) {
   const doc = await getDocument(docId);
@@ -361,17 +364,44 @@ async function narrowTwoColumnTableFirstCols(docId) {
       0;
     if (colCount !== 2) continue;
 
-    requests.push({
-      updateTableColumnProperties: {
-        tableStartLocation: { index: el.startIndex },
-        columnIndices: [0],
-        tableColumnProperties: {
-          widthType: 'FIXED_WIDTH',
-          width: { magnitude: NARROW_FIRST_COL_PT, unit: 'PT' },
+    const props = el.table.tableStyle?.tableColumnProperties || [];
+    const w0 = props[0]?.width?.magnitude;
+    const w1 = props[1]?.width?.magnitude;
+    const total =
+      typeof w0 === 'number' &&
+      typeof w1 === 'number' &&
+      w0 + w1 >= NARROW_FIRST_COL_PT + 40
+        ? w0 + w1
+        : DEFAULT_TWO_COL_TABLE_WIDTH_PT;
+
+    const first = Math.min(NARROW_FIRST_COL_PT, total - 40);
+    const second = Math.max(total - first, 40);
+
+    const location = { index: el.startIndex };
+    requests.push(
+      {
+        updateTableColumnProperties: {
+          tableStartLocation: location,
+          columnIndices: [0],
+          tableColumnProperties: {
+            widthType: 'FIXED_WIDTH',
+            width: { magnitude: first, unit: 'PT' },
+          },
+          fields: 'widthType,width',
         },
-        fields: 'widthType,width',
       },
-    });
+      {
+        updateTableColumnProperties: {
+          tableStartLocation: location,
+          columnIndices: [1],
+          tableColumnProperties: {
+            widthType: 'FIXED_WIDTH',
+            width: { magnitude: second, unit: 'PT' },
+          },
+          fields: 'widthType,width',
+        },
+      }
+    );
   }
 
   if (requests.length) {
