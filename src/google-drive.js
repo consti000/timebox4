@@ -28,6 +28,14 @@ const SECTION_START_PREFIX = '[[TIMEBOX_START:';
 const SECTION_END_PREFIX = '[[TIMEBOX_END:';
 const TIME_SLOTS = generateTimeSlots(5, 24);
 const TABLE_HEADER_BG = '#edeef5';
+/**
+ * 2열 표 첫 열 너비.
+ * Docs HTML 변환은 colgroup/%를 무시해 균등(~50%)이 되므로,
+ * 업로드 후 Docs API로 FIXED_WIDTH를 적용합니다. (기존 균등폭의 약 25%)
+ */
+const NARROW_FIRST_COL_PT = 58;
+const NARROW_FIRST_COL_PCT = 12;
+const WIDE_SECOND_COL_PCT = 88;
 
 let folderId = null;
 let masterDocId = null;
@@ -183,14 +191,40 @@ function escapeHtml(value) {
 }
 
 function renderTableHtml(headers, rows, columnWidths) {
-  const colgroup = columnWidths?.length
-    ? `<colgroup>${columnWidths
-        .map((w) => `<col style="width:${w}%">`)
-        .join('')}</colgroup>`
-    : '';
+  const widths =
+    columnWidths?.length === headers.length
+      ? columnWidths
+      : headers.map(() => Math.floor(100 / Math.max(headers.length, 1)));
+
+  const colgroup = `<colgroup>${widths
+    .map((w, i) => {
+      const pt =
+        headers.length === 2 && i === 0 ? `${NARROW_FIRST_COL_PT}pt` : `${w}%`;
+      return `<col width="${pt}" style="width:${pt}">`;
+    })
+    .join('')}</colgroup>`;
+
+  const cellStyle = (index, isHeader) => {
+    const w = widths[index] ?? '';
+    const widthCss =
+      headers.length === 2 && index === 0
+        ? `width:${NARROW_FIRST_COL_PT}pt`
+        : `width:${w}%`;
+    const base = `border:1px solid #ccc;padding:6px;${widthCss}`;
+    if (isHeader) return `${base};text-align:left`;
+    return `${base};vertical-align:top`;
+  };
+
+  const cellWidthAttr = (index) => {
+    if (headers.length === 2 && index === 0) return `${NARROW_FIRST_COL_PT}pt`;
+    return `${widths[index]}%`;
+  };
 
   const head = `<tr style="background:${TABLE_HEADER_BG}">${headers
-    .map((h) => `<th style="border:1px solid #ccc;padding:6px;text-align:left">${escapeHtml(h)}</th>`)
+    .map(
+      (h, i) =>
+        `<th width="${cellWidthAttr(i)}" style="${cellStyle(i, true)}">${escapeHtml(h)}</th>`
+    )
     .join('')}</tr>`;
 
   const body = rows
@@ -198,14 +232,14 @@ function renderTableHtml(headers, rows, columnWidths) {
       (row) =>
         `<tr>${row
           .map(
-            (cell) =>
-              `<td style="border:1px solid #ccc;padding:6px;vertical-align:top">${escapeHtml(cell)}</td>`
+            (cell, i) =>
+              `<td width="${cellWidthAttr(i)}" style="${cellStyle(i, false)}">${escapeHtml(cell)}</td>`
           )
           .join('')}</tr>`
     )
     .join('');
 
-  return `<table style="border-collapse:collapse;width:100%;margin:8px 0 16px">${colgroup}${head}${body}</table>`;
+  return `<table style="border-collapse:collapse;table-layout:fixed;width:100%;margin:8px 0 16px">${colgroup}${head}${body}</table>`;
 }
 
 function buildDateSectionHtml(dateISO, data) {
@@ -234,16 +268,17 @@ function buildDateSectionHtml(dateISO, data) {
 
   const memoText = data.memo?.trim() || '(메모 없음)';
   const footer = `마지막 저장: ${new Date().toLocaleString('ko-KR')}`;
+  const narrowTwoCol = [NARROW_FIRST_COL_PCT, WIDE_SECOND_COL_PCT];
 
   return [
     `<p>${escapeHtml(sectionStartMarker(dateISO))}</p>`,
     `<h1>${escapeHtml(title)}</h1>`,
     `<h3>Top 3 우선순위</h3>`,
-    renderTableHtml(['우선순위', '내용'], priorityRows, [20, 80]),
+    renderTableHtml(['우선순위', '내용'], priorityRows, narrowTwoCol),
     `<h3>할 일 목록</h3>`,
-    renderTableHtml(['상태', '할 일'], todoRows, [20, 80]),
+    renderTableHtml(['상태', '할 일'], todoRows, narrowTwoCol),
     `<h3>타임박스 (05:00 - 24:00)</h3>`,
-    renderTableHtml(['시간', '계획'], timelineRows, [20, 80]),
+    renderTableHtml(['시간', '계획'], timelineRows, narrowTwoCol),
     `<h3>Brain Dump</h3>`,
     renderTableHtml(['내용'], [[memoText]]),
     `<p>${escapeHtml(footer)}</p>`,
@@ -308,6 +343,40 @@ async function insertPageBreaksBetweenDates(docId, dateISOs) {
       insertPageBreak: { location: { index } },
     }))
   );
+}
+
+/**
+ * 2열 표(우선순위/상태/시간)의 첫 열을 좁게 고정합니다.
+ * HTML width는 Docs 변환에서 무시되는 경우가 많아 batchUpdate로 적용합니다.
+ */
+async function narrowTwoColumnTableFirstCols(docId) {
+  const doc = await getDocument(docId);
+  const requests = [];
+
+  for (const el of doc.body?.content || []) {
+    if (!el.table || el.startIndex == null) continue;
+    const colCount =
+      el.table.columns ??
+      el.table.tableRows?.[0]?.tableCells?.length ??
+      0;
+    if (colCount !== 2) continue;
+
+    requests.push({
+      updateTableColumnProperties: {
+        tableStartLocation: { index: el.startIndex },
+        columnIndices: [0],
+        tableColumnProperties: {
+          widthType: 'FIXED_WIDTH',
+          width: { magnitude: NARROW_FIRST_COL_PT, unit: 'PT' },
+        },
+        fields: 'widthType,width',
+      },
+    });
+  }
+
+  if (requests.length) {
+    await batchUpdate(docId, requests);
+  }
 }
 
 /**
@@ -463,6 +532,7 @@ export async function saveToGoogleDocs(entries) {
 
   await replaceDocumentWithHtml(docId, html);
   await insertPageBreaksBetweenDates(docId, dates);
+  await narrowTwoColumnTableFirstCols(docId);
 
   const finalDoc = await getDocument(docId);
   const raw = JSON.stringify(finalDoc.body || {});
