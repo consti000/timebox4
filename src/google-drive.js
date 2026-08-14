@@ -193,37 +193,55 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+/** 캡처처럼 2글자 헤더는 글자 사이 공백을 넣습니다. (내용→내 용, 시간→시 간) */
+function formatSpreadHeaderLabel(label) {
+  const text = String(label || '').trim();
+  if (text.length === 2 && !text.includes(' ')) {
+    return `${text[0]} ${text[1]}`;
+  }
+  return text;
+}
+
 function renderTableHtml(headers, rows, columnWidths) {
   const widths =
     columnWidths?.length === headers.length
       ? columnWidths
       : headers.map(() => Math.floor(100 / Math.max(headers.length, 1)));
 
+  const twoCol = headers.length === 2;
+  const displayHeaders = headers.map(formatSpreadHeaderLabel);
+
   const colgroup = `<colgroup>${widths
     .map((w, i) => {
       const pt =
-        headers.length === 2 && i === 0 ? `${NARROW_FIRST_COL_PT}pt` : `${w}%`;
+        twoCol && i === 0 ? `${NARROW_FIRST_COL_PT}pt` : `${w}%`;
       return `<col width="${pt}" style="width:${pt}">`;
     })
     .join('')}</colgroup>`;
 
+  const horizontalAlign = (index, isHeader) => {
+    if (twoCol) {
+      return isHeader || index === 0 ? 'center' : 'left';
+    }
+    return isHeader ? 'center' : 'left';
+  };
+
   const cellStyle = (index, isHeader) => {
     const w = widths[index] ?? '';
     const widthCss =
-      headers.length === 2 && index === 0
+      twoCol && index === 0
         ? `width:${NARROW_FIRST_COL_PT}pt`
         : `width:${w}%`;
-    const base = `border:1px solid #ccc;padding:6px;${widthCss}`;
-    if (isHeader) return `${base};text-align:left`;
-    return `${base};vertical-align:top`;
+    const align = horizontalAlign(index, isHeader);
+    return `border:1px solid #ccc;padding:6px;${widthCss};text-align:${align};vertical-align:middle`;
   };
 
   const cellWidthAttr = (index) => {
-    if (headers.length === 2 && index === 0) return `${NARROW_FIRST_COL_PT}pt`;
+    if (twoCol && index === 0) return `${NARROW_FIRST_COL_PT}pt`;
     return `${widths[index]}%`;
   };
 
-  const head = `<tr style="background:${TABLE_HEADER_BG}">${headers
+  const head = `<tr style="background:${TABLE_HEADER_BG}">${displayHeaders
     .map(
       (h, i) =>
         `<th width="${cellWidthAttr(i)}" style="${cellStyle(i, true)}">${escapeHtml(h)}</th>`
@@ -313,6 +331,101 @@ async function batchUpdate(docId, requests) {
     method: 'POST',
     body: JSON.stringify({ requests }),
   });
+}
+
+async function batchUpdateChunked(docId, requests, chunkSize = 400) {
+  for (let i = 0; i < requests.length; i += chunkSize) {
+    await batchUpdate(docId, requests.slice(i, i + chunkSize));
+  }
+}
+
+function getCellParagraphRange(cell) {
+  for (const block of cell?.content || []) {
+    if (
+      block.paragraph &&
+      typeof block.startIndex === 'number' &&
+      typeof block.endIndex === 'number' &&
+      block.endIndex > block.startIndex
+    ) {
+      return { startIndex: block.startIndex, endIndex: block.endIndex };
+    }
+  }
+  return null;
+}
+
+function paragraphAlignmentRequest(range, alignment) {
+  return {
+    updateParagraphStyle: {
+      range,
+      paragraphStyle: { alignment },
+      fields: 'alignment',
+    },
+  };
+}
+
+function cellVerticalAlignRequest(tableStartIndex, rowIndex, columnIndex) {
+  return {
+    updateTableCellStyle: {
+      tableStartLocation: { index: tableStartIndex },
+      tableRange: {
+        tableCellLocation: {
+          tableStartLocation: { index: tableStartIndex },
+          rowIndex,
+          columnIndex,
+        },
+        rowSpan: 1,
+        columnSpan: 1,
+      },
+      tableCellStyle: { contentAlignment: 'MIDDLE' },
+      fields: 'contentAlignment',
+    },
+  };
+}
+
+/**
+ * HTML 변환 후에도 표 셀 정렬이 풀리는 경우가 있어 Docs API로 재적용합니다.
+ * - 2열: 헤더·첫 열 가운데, 둘째 열 본문 왼쪽
+ * - 1열(Brain Dump): 헤더 가운데, 본문 왼쪽
+ */
+function buildTableFormattingRequests(doc) {
+  const requests = [];
+
+  for (const el of doc.body?.content || []) {
+    if (!el.table || el.startIndex == null) continue;
+    const rows = el.table.tableRows || [];
+    const colCount =
+      el.table.columns ?? rows[0]?.tableCells?.length ?? 0;
+    if (colCount !== 1 && colCount !== 2) continue;
+
+    rows.forEach((row, rowIndex) => {
+      row.tableCells?.forEach((cell, colIndex) => {
+        const range = getCellParagraphRange(cell);
+        if (!range) return;
+
+        let alignment = 'START';
+        if (colCount === 1) {
+          alignment = rowIndex === 0 ? 'CENTER' : 'START';
+        } else if (rowIndex === 0 || colIndex === 0) {
+          alignment = 'CENTER';
+        }
+
+        requests.push(paragraphAlignmentRequest(range, alignment));
+        requests.push(
+          cellVerticalAlignRequest(el.startIndex, rowIndex, colIndex)
+        );
+      });
+    });
+  }
+
+  return requests;
+}
+
+async function applyTableFormatting(docId) {
+  const doc = await getDocument(docId);
+  const requests = buildTableFormattingRequests(doc);
+  if (requests.length) {
+    await batchUpdateChunked(docId, requests);
+  }
 }
 
 /**
@@ -576,6 +689,7 @@ export async function saveToGoogleDocs(entries) {
   await replaceDocumentWithHtml(docId, html);
   await insertPageBreaksBetweenDates(docId, dates);
   await narrowTwoColumnTableFirstCols(docId);
+  await applyTableFormatting(docId);
 
   const finalDoc = await getDocument(docId);
   const raw = JSON.stringify(finalDoc.body || {});
