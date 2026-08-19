@@ -1,4 +1,4 @@
-import { generateTimeSlots } from './utils.js';
+import { generateTimeSlots, mergeTodosForDate } from './utils.js';
 import {
   apiFetch,
   createAuthExpiredError,
@@ -264,7 +264,7 @@ export async function pullDayToTimeline(dateISO, timeline, brainDump = []) {
   const next = { ...timeline };
   const nextTodos = Array.isArray(brainDump) ? [...brainDump] : [];
   const existingTodoKeys = new Set(
-    nextTodos
+    mergeTodosForDate(dateISO, { brainDump: nextTodos })
       .map((item) => item?.text?.trim().toLowerCase())
       .filter(Boolean)
   );

@@ -77,6 +77,7 @@ export function createEmptyDayData() {
   return {
     priorities: [{ text: '' }, { text: '' }, { text: '' }],
     brainDump: [],
+    skippedRecurringIds: [],
     timeline: {},
     memo: '',
     updatedAt: new Date().toISOString(),
@@ -99,11 +100,21 @@ export function normalizeDayData(raw) {
   const brainDump = Array.isArray(raw.brainDump)
     ? raw.brainDump
         .filter((item) => item && typeof item.text === 'string' && item.text.trim())
-        .map((item) => ({
-          text: item.text,
-          done: Boolean(item.done),
-          id: typeof item.id === 'number' ? item.id : Date.now() + Math.random(),
-        }))
+        .map((item) => {
+          const next = {
+            text: item.text,
+            done: Boolean(item.done),
+            id: typeof item.id === 'number' ? item.id : Date.now() + Math.random(),
+          };
+          if (item.recurringId != null && item.recurringId !== '') {
+            next.recurringId = item.recurringId;
+          }
+          return next;
+        })
+    : [];
+
+  const skippedRecurringIds = Array.isArray(raw.skippedRecurringIds)
+    ? raw.skippedRecurringIds.filter((id) => id != null && id !== '')
     : [];
 
   const timeline = {};
@@ -118,11 +129,113 @@ export function normalizeDayData(raw) {
   return {
     priorities,
     brainDump,
+    skippedRecurringIds,
     timeline,
     memo: typeof raw.memo === 'string' ? raw.memo : '',
     updatedAt:
       typeof raw.updatedAt === 'string' ? raw.updatedAt : empty.updatedAt,
   };
+}
+
+const RECURRING_TODOS_KEY = `${STORAGE_PREFIX}recurring_todos`;
+
+function normalizeRecurringTodo(item) {
+  const text = typeof item?.text === 'string' ? item.text.trim() : '';
+  const startDate = validateDate(String(item?.startDate || ''));
+  const endDate = validateDate(String(item?.endDate || ''));
+  if (!text || !startDate || !endDate) return null;
+  const [from, to] = startDate <= endDate ? [startDate, endDate] : [endDate, startDate];
+  return {
+    id: item.id != null && item.id !== '' ? item.id : Date.now() + Math.random(),
+    text,
+    startDate: from,
+    endDate: to,
+  };
+}
+
+export function loadRecurringTodos() {
+  try {
+    const raw = localStorage.getItem(RECURRING_TODOS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeRecurringTodo).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function saveRecurringTodos(items) {
+  const normalized = (Array.isArray(items) ? items : [])
+    .map(normalizeRecurringTodo)
+    .filter(Boolean);
+  localStorage.setItem(RECURRING_TODOS_KEY, JSON.stringify(normalized));
+  return normalized;
+}
+
+export function addRecurringTodo({ text, startDate, endDate }) {
+  const next = normalizeRecurringTodo({
+    id: Date.now() + Math.random(),
+    text,
+    startDate,
+    endDate,
+  });
+  if (!next) return null;
+  const items = loadRecurringTodos();
+  items.push(next);
+  saveRecurringTodos(items);
+  return next;
+}
+
+export function removeRecurringTodo(id) {
+  const items = loadRecurringTodos().filter((item) => item.id !== id);
+  saveRecurringTodos(items);
+}
+
+export function recurringCoversDate(item, dateISO) {
+  return Boolean(item?.startDate && item?.endDate && dateISO >= item.startDate && dateISO <= item.endDate);
+}
+
+export function formatRepeatRange(startISO, endISO) {
+  const fmt = (iso) => {
+    const [, m, d] = String(iso).split('-');
+    return `${parseInt(m, 10)}/${parseInt(d, 10)}`;
+  };
+  if (!startISO || !endISO) return '';
+  if (startISO === endISO) return fmt(startISO);
+  return `${fmt(startISO)}–${fmt(endISO)}`;
+}
+
+/** 해당 날짜에 표시할 할 일(하루 항목 + 기간 반복) */
+export function mergeTodosForDate(dateISO, data) {
+  const day = normalizeDayData(data);
+  const skipped = new Set(day.skippedRecurringIds);
+  const local = [];
+  const completions = new Map();
+
+  for (const item of day.brainDump) {
+    if (item.recurringId != null) {
+      completions.set(item.recurringId, item);
+    } else {
+      local.push(item);
+    }
+  }
+
+  const recurring = loadRecurringTodos()
+    .filter((item) => recurringCoversDate(item, dateISO) && !skipped.has(item.id))
+    .map((item) => {
+      const saved = completions.get(item.id);
+      return {
+        text: item.text,
+        done: Boolean(saved?.done),
+        id: saved?.id ?? item.id,
+        recurringId: item.id,
+        startDate: item.startDate,
+        endDate: item.endDate,
+      };
+    });
+
+  return [...local, ...recurring];
 }
 
 export function loadDayData(dateISO) {

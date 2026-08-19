@@ -55,6 +55,20 @@
               <input type="text" id="brain-dump-input" class="text-input" placeholder="할 일 추가" autocomplete="off" />
               <button type="submit" class="btn btn-ghost">추가</button>
             </form>
+            <div class="todo-repeat-row">
+              <span class="todo-repeat-label">▶기간 반복 설정 :</span>
+              <div id="todo-repeat-dates" class="todo-repeat-dates">
+                <label class="todo-repeat-field">
+                  <span>시작</span>
+                  <input type="date" id="todo-repeat-start" />
+                </label>
+                <span class="todo-repeat-tilde" aria-hidden="true">~</span>
+                <label class="todo-repeat-field">
+                  <span>종료</span>
+                  <input type="date" id="todo-repeat-end" />
+                </label>
+              </div>
+            </div>
             <ul id="brain-dump-list" class="check-list"></ul>
             <p id="empty-todo" class="empty-state">아직 할 일이 없습니다.</p>
           </section>

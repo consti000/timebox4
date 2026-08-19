@@ -7,6 +7,10 @@ import {
   loadDayData,
   saveDayData,
   debounce,
+  addRecurringTodo,
+  removeRecurringTodo,
+  mergeTodosForDate,
+  formatRepeatRange,
 } from './utils.js';
 import {
   isGoogleConfigured,
@@ -134,10 +138,16 @@ async function syncToGoogle() {
     persistLocal();
 
     const stripDates = dateWindowAround(currentDate, DATE_STRIP_RADIUS);
-    const entries = stripDates.map((dateISO) => ({
-      dateISO,
-      data: dateISO === currentDate ? dayData : loadDayData(dateISO),
-    }));
+    const entries = stripDates.map((dateISO) => {
+      const data = dateISO === currentDate ? dayData : loadDayData(dateISO);
+      return {
+        dateISO,
+        data: {
+          ...data,
+          brainDump: mergeTodosForDate(dateISO, data),
+        },
+      };
+    });
 
     const result = await saveToGoogleDocs(entries);
     setSaveIndicator('synced', 'Google Docs 저장됨');
@@ -399,22 +409,21 @@ function renderPriorities() {
 }
 
 function renderBrainDump() {
+  const todos = mergeTodosForDate(currentDate, dayData);
   els.brainDumpList.replaceChildren();
-  els.emptyTodo.hidden = dayData.brainDump.length > 0;
+  els.emptyTodo.hidden = todos.length > 0;
 
-  dayData.brainDump.forEach((item, index) => {
+  todos.forEach((item) => {
     const li = document.createElement('li');
     li.className = `check-list-item${item.done ? ' done' : ''}`;
 
-    const checkboxId = `todo-check-${item.id ?? index}`;
+    const checkboxId = `todo-check-${item.id ?? item.recurringId}`;
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.id = checkboxId;
     checkbox.checked = item.done;
     checkbox.addEventListener('change', () => {
-      updateDayData((d) => {
-        d.brainDump[index].done = checkbox.checked;
-      });
+      setTodoDone(item, checkbox.checked);
       li.classList.toggle('done', checkbox.checked);
     });
 
@@ -422,21 +431,67 @@ function renderBrainDump() {
     label.htmlFor = checkboxId;
     label.textContent = item.text;
 
+    if (item.recurringId != null) {
+      const badge = document.createElement('span');
+      badge.className = 'todo-repeat-badge';
+      badge.textContent = formatRepeatRange(item.startDate, item.endDate);
+      badge.title = '기간 반복 할 일';
+      li.append(checkbox, label, badge);
+    } else {
+      li.append(checkbox, label);
+    }
+
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'delete-btn';
     deleteBtn.textContent = '×';
-    deleteBtn.title = '삭제';
-    deleteBtn.setAttribute('aria-label', `${item.text} 삭제`);
+    deleteBtn.title = item.recurringId != null ? '반복 할 일 전체 삭제' : '삭제';
+    deleteBtn.setAttribute(
+      'aria-label',
+      item.recurringId != null ? `${item.text} 반복 삭제` : `${item.text} 삭제`
+    );
     deleteBtn.addEventListener('click', () => {
-      updateDayData((d) => {
-        d.brainDump.splice(index, 1);
-      });
+      deleteTodo(item);
       renderBrainDump();
     });
 
-    li.append(checkbox, label, deleteBtn);
+    li.appendChild(deleteBtn);
     els.brainDumpList.appendChild(li);
+  });
+}
+
+function setTodoDone(item, done) {
+  updateDayData((d) => {
+    if (item.recurringId != null) {
+      const idx = d.brainDump.findIndex((todo) => todo.recurringId === item.recurringId);
+      if (idx >= 0) {
+        d.brainDump[idx].done = done;
+      } else {
+        d.brainDump.push({
+          text: item.text,
+          done,
+          id: Date.now() + Math.random(),
+          recurringId: item.recurringId,
+        });
+      }
+      return;
+    }
+    const idx = d.brainDump.findIndex((todo) => todo.id === item.id);
+    if (idx >= 0) d.brainDump[idx].done = done;
+  });
+}
+
+function deleteTodo(item) {
+  if (item.recurringId != null) {
+    removeRecurringTodo(item.recurringId);
+    updateDayData((d) => {
+      d.brainDump = d.brainDump.filter((todo) => todo.recurringId !== item.recurringId);
+    });
+    showToast('반복 할 일을 기간에서 삭제했습니다.');
+    return;
+  }
+  updateDayData((d) => {
+    d.brainDump = d.brainDump.filter((todo) => todo.id !== item.id);
   });
 }
 
@@ -590,6 +645,27 @@ function bindEvents() {
     const text = els.brainDumpInput.value.trim();
     if (!text) return;
 
+    const startDate = els.todoRepeatStart?.value;
+    const endDate = els.todoRepeatEnd?.value;
+    if (startDate || endDate) {
+      const added = addRecurringTodo({
+        text,
+        startDate: startDate || currentDate,
+        endDate: endDate || currentDate,
+      });
+      if (!added) {
+        showToast('반복 기간이 올바르지 않습니다.', 'error');
+        return;
+      }
+      els.brainDumpInput.value = '';
+      renderBrainDump();
+      showToast(
+        `${formatRepeatRange(added.startDate, added.endDate)} 동안 반복 표시합니다.`,
+        'success'
+      );
+      return;
+    }
+
     updateDayData((d) => {
       d.brainDump.push({ text, done: false, id: Date.now() });
     });
@@ -694,6 +770,8 @@ export function initApp() {
   els.brainDumpInput = $('brain-dump-input');
   els.brainDumpList = $('brain-dump-list');
   els.emptyTodo = $('empty-todo');
+  els.todoRepeatStart = $('todo-repeat-start');
+  els.todoRepeatEnd = $('todo-repeat-end');
   els.timelineGrid = $('timeline-grid');
   els.timelineResetBtn = $('timeline-reset-btn');
   els.memoInput = $('memo-input');
