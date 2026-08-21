@@ -23,3 +23,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Local work journal (do not commit)
+작업일지.md
+_build_worklog.py
