@@ -21,6 +21,12 @@
         <div class="header-actions">
           <button type="button" id="google-auth-btn" class="btn btn-ghost">Google 로그인</button>
           <button type="button" id="manual-save-btn" class="btn btn-primary">구글 닥스에 저장</button>
+          <label class="calendar-label-picker" for="calendar-export-label">
+            <span>보내기 라벨</span>
+            <select id="calendar-export-label" class="calendar-export-label" disabled>
+              <option value="">(라벨 없음)</option>
+            </select>
+          </label>
           <button type="button" id="calendar-pull-btn" class="btn btn-ghost">캘린더 불러오기</button>
           <button type="button" id="calendar-push-btn" class="btn btn-ghost">캘린더 보내기</button>
         </div>

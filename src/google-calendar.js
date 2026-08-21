@@ -10,15 +10,13 @@ const CALENDAR_ID = 'primary';
 const TIMEBOX_ORIGIN = 'timebox4';
 const TIME_SLOTS = generateTimeSlots(5, 24);
 const SLOT_MINUTES = 30;
-/** Google Calendar 이벤트 색상 라벨 이름 (Time Insights 라벨) */
-const EVENT_LABEL_NAME = 'Privacy';
-const LEGACY_EVENT_LABEL_NAME = 'Money';
 const EVENT_LABEL_FALLBACK_COLOR = '#8e24aa';
+const EXPORT_LABEL_STORAGE_KEY = 'timebox4_calendar_export_label_id';
 
-let cachedPrivacyLabelId = null;
+let cachedEventLabels = null;
 
 onSignOut(() => {
-  cachedPrivacyLabelId = null;
+  cachedEventLabels = null;
 });
 
 function getTimeZone() {
@@ -129,59 +127,104 @@ function findLabelByName(labels, name) {
   const target = String(name || '')
     .trim()
     .toLowerCase();
-  return labels.find(
-    (label) =>
-      String(label?.name || '')
-        .trim()
-        .toLowerCase() === target
+  if (!target) return null;
+  return (
+    labels.find(
+      (label) =>
+        String(label?.name || '')
+          .trim()
+          .toLowerCase() === target
+    ) || null
   );
 }
 
-/**
- * Privacy 라벨 ID를 반환합니다.
- * - Privacy가 있으면 그대로 사용
- * - 없고 Money만 있으면 Money → Privacy 로 이름 변경
- * - 둘 다 없으면 Privacy 라벨 생성
- */
-async function ensurePrivacyLabelId() {
-  if (cachedPrivacyLabelId) return cachedPrivacyLabelId;
+function findLabelById(labels, id) {
+  if (id == null || id === '') return null;
+  return labels.find((label) => label?.id === id) || null;
+}
+
+export function getPreferredExportLabelId() {
+  try {
+    return localStorage.getItem(EXPORT_LABEL_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setPreferredExportLabelId(labelId) {
+  try {
+    if (labelId) {
+      localStorage.setItem(EXPORT_LABEL_STORAGE_KEY, labelId);
+    } else {
+      localStorage.removeItem(EXPORT_LABEL_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+/** primary 캘린더의 이벤트 색상 라벨 목록을 가져옵니다. */
+export async function listEventLabels({ forceRefresh = false } = {}) {
+  if (!isAuthenticated()) {
+    throw createAuthExpiredError();
+  }
+  if (!forceRefresh && Array.isArray(cachedEventLabels)) {
+    return cachedEventLabels;
+  }
 
   const calendar = await apiFetch(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}`
   );
   const labels = Array.isArray(calendar?.labelProperties?.eventLabels)
-    ? [...calendar.labelProperties.eventLabels]
+    ? calendar.labelProperties.eventLabels
+        .filter((label) => label?.id)
+        .map((label) => ({
+          id: label.id,
+          name: String(label.name || '(이름 없음)').trim() || '(이름 없음)',
+          backgroundColor: label.backgroundColor || EVENT_LABEL_FALLBACK_COLOR,
+        }))
     : [];
 
-  const privacy = findLabelByName(labels, EVENT_LABEL_NAME);
-  if (privacy?.id) {
-    cachedPrivacyLabelId = privacy.id;
-    return cachedPrivacyLabelId;
+  cachedEventLabels = labels;
+  return labels;
+}
+
+/**
+ * 내보내기용 라벨 ID를 확정합니다.
+ * - labelId가 목록에 있으면 그대로 사용
+ * - 없으면 labelName으로 찾거나 새로 생성
+ * - 둘 다 없으면 null (라벨 미지정)
+ */
+export async function resolveExportLabelId({
+  labelId = '',
+  labelName = '',
+} = {}) {
+  const labels = await listEventLabels({ forceRefresh: true });
+
+  if (labelId) {
+    const byId = findLabelById(labels, labelId);
+    if (byId) return byId.id;
   }
 
-  const money = findLabelByName(labels, LEGACY_EVENT_LABEL_NAME);
-  let nextLabels;
-  let labelId;
+  const name = String(labelName || '').trim();
+  if (!name) return null;
 
-  if (money?.id) {
-    labelId = money.id;
-    nextLabels = labels.map((label) =>
-      label.id === money.id ? { ...label, name: EVENT_LABEL_NAME } : label
-    );
-  } else {
-    labelId =
-      typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `tb4-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
-    nextLabels = [
-      ...labels,
-      {
-        id: labelId,
-        backgroundColor: EVENT_LABEL_FALLBACK_COLOR,
-        name: EVENT_LABEL_NAME,
-      },
-    ];
-  }
+  const existing = findLabelByName(labels, name);
+  if (existing?.id) return existing.id;
+
+  const newId =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `tb4-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+
+  const nextLabels = [
+    ...labels,
+    {
+      id: newId,
+      backgroundColor: EVENT_LABEL_FALLBACK_COLOR,
+      name,
+    },
+  ];
 
   await apiFetch(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}`,
@@ -193,8 +236,12 @@ async function ensurePrivacyLabelId() {
     }
   );
 
-  cachedPrivacyLabelId = labelId;
-  return cachedPrivacyLabelId;
+  cachedEventLabels = nextLabels.map((label) => ({
+    id: label.id,
+    name: String(label.name || '(이름 없음)').trim() || '(이름 없음)',
+    backgroundColor: label.backgroundColor || EVENT_LABEL_FALLBACK_COLOR,
+  }));
+  return newId;
 }
 
 async function listDayEvents(dateISO, { ownedOnly = false } = {}) {
@@ -231,10 +278,9 @@ function buildEventBody(dateISO, block, eventLabelId) {
         timeboxDate: dateISO,
       },
     },
+    // 빈 문자열이면 기존 라벨 제거 (eventLabelVersion=1)
+    eventLabelId: eventLabelId || '',
   };
-  if (eventLabelId) {
-    body.eventLabelId = eventLabelId;
-  }
   return body;
 }
 
@@ -252,6 +298,7 @@ function allDayCoversDate(event, dateISO) {
 
 /**
  * 외부(non-timebox4) 캘린더 일정을 반영합니다.
+ * - 라벨과 무관하게 당일 primary 일정을 모두 대상
  * - 시간이 있는 일정 → 빈 타임박스 슬롯만 채움
  * - 종일 일정 → 할 일 목록에 추가(동일 제목 중복 방지)
  */
@@ -428,13 +475,21 @@ function collectOwnedDuplicateIds(owned, keepIds) {
  * 타임라인 블록을 캘린더에 upsert합니다.
  * - 제목+시작(또는 겹침)으로 기존 일정을 찾아 Timebox4면 수정, 외부면 생성 생략
  * - 남은 Timebox4 고아/중복 일정은 삭제
+ * - options.labelId / labelName 으로 내보내기 라벨 지정 (없으면 라벨 미지정)
  */
-export async function pushTimelineToCalendar(dateISO, timeline) {
+export async function pushTimelineToCalendar(dateISO, timeline, options = {}) {
   if (!isAuthenticated()) {
     throw createAuthExpiredError();
   }
 
-  const privacyLabelId = await ensurePrivacyLabelId();
+  const exportLabelId = await resolveExportLabelId({
+    labelId: options.labelId || '',
+    labelName: options.labelName || '',
+  });
+  if (exportLabelId) {
+    setPreferredExportLabelId(exportLabelId);
+  }
+
   const blocks = mergeTimelineToBlocks(dateISO, timeline);
   const { owned, allEvents } = await listPushContext(dateISO);
   const unusedOwned = new Set(owned.map((event) => event.id).filter(Boolean));
@@ -447,7 +502,7 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
   let skipped = 0;
 
   for (const block of blocks) {
-    const body = buildEventBody(dateISO, block, privacyLabelId);
+    const body = buildEventBody(dateISO, block, exportLabelId);
     const match = findExistingMatch(block, allEvents, claimedIds);
 
     if (match) {
@@ -461,7 +516,8 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
           range &&
           sameInstant(range.start, block.start) &&
           sameInstant(range.end, block.end);
-        const sameLabel = match.eventLabelId === privacyLabelId;
+        const sameLabel =
+          (match.eventLabelId || '') === (exportLabelId || '');
 
         if (sameSummary && sameRange && sameLabel) {
           unchanged += 1;
@@ -511,6 +567,7 @@ export async function pushTimelineToCalendar(dateISO, timeline) {
     unchanged,
     skipped,
     total: blocks.length,
+    labelId: exportLabelId || null,
     calendarUrl: calendarDayUrl(dateISO),
   };
 }

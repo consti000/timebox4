@@ -30,6 +30,9 @@ import {
 import {
   pullDayToTimeline,
   pushTimelineToCalendar,
+  listEventLabels,
+  getPreferredExportLabelId,
+  setPreferredExportLabelId,
 } from './google-calendar.js';
 
 const TIME_SLOTS = generateTimeSlots(5, 24);
@@ -331,7 +334,10 @@ async function pushToCalendar() {
 
     debouncedPersist.cancel?.();
     persistLocal();
-    const result = await pushTimelineToCalendar(currentDate, dayData.timeline);
+    const labelId = els.calendarExportLabel?.value || '';
+    const result = await pushTimelineToCalendar(currentDate, dayData.timeline, {
+      labelId,
+    });
     setSaveIndicator('synced', '캘린더 반영됨');
     els.syncStatus.hidden = false;
     els.syncStatus.className = 'sync-status success';
@@ -599,6 +605,7 @@ function updateGoogleButton() {
   renderGoogleSetupNotice();
 
   const busy = isSaving || Boolean(calendarAction);
+  const ready = isGoogleConfigured() && isAuthenticated();
 
   if (!isGoogleConfigured()) {
     els.googleAuthBtn.textContent = 'Google 로그인';
@@ -608,14 +615,18 @@ function updateGoogleButton() {
     els.manualSaveBtn.textContent = '구글 닥스에 저장';
     els.calendarPullBtn.disabled = true;
     els.calendarPushBtn.disabled = true;
+    if (els.calendarExportLabel) els.calendarExportLabel.disabled = true;
     return;
   }
 
   els.googleAuthBtn.disabled = busy;
-  els.manualSaveBtn.disabled = busy;
+  els.manualSaveBtn.disabled = busy || !ready;
   els.manualSaveBtn.textContent = isSaving ? '저장 중...' : '구글 닥스에 저장';
-  els.calendarPullBtn.disabled = busy;
-  els.calendarPushBtn.disabled = busy;
+  els.calendarPullBtn.disabled = busy || !ready;
+  els.calendarPushBtn.disabled = busy || !ready;
+  if (els.calendarExportLabel) {
+    els.calendarExportLabel.disabled = busy || !ready;
+  }
   els.calendarPullBtn.textContent =
     calendarAction === 'pull' ? '불러오는 중...' : '캘린더 불러오기';
   els.calendarPushBtn.textContent =
@@ -627,7 +638,54 @@ function updateGoogleButton() {
   } else {
     els.googleAuthBtn.textContent = 'Google 로그인';
     els.googleAuthBtn.classList.remove('connected');
+    resetExportLabelSelect();
   }
+}
+
+async function refreshExportLabelSelect() {
+  if (!els.calendarExportLabel || !isAuthenticated()) {
+    resetExportLabelSelect();
+    return;
+  }
+
+  try {
+    const labels = await listEventLabels({ forceRefresh: true });
+    const preferred = getPreferredExportLabelId();
+    els.calendarExportLabel.replaceChildren();
+
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '(라벨 없음)';
+    els.calendarExportLabel.appendChild(none);
+
+    for (const label of labels) {
+      const opt = document.createElement('option');
+      opt.value = label.id;
+      opt.textContent = label.name;
+      els.calendarExportLabel.appendChild(opt);
+    }
+
+    if (preferred && labels.some((label) => label.id === preferred)) {
+      els.calendarExportLabel.value = preferred;
+    } else {
+      els.calendarExportLabel.value = '';
+    }
+    els.calendarExportLabel.disabled = Boolean(isSaving || calendarAction);
+  } catch (err) {
+    console.warn('캘린더 라벨 목록 로드 실패:', err);
+    resetExportLabelSelect();
+  }
+}
+
+function resetExportLabelSelect() {
+  if (!els.calendarExportLabel) return;
+  els.calendarExportLabel.replaceChildren();
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '(라벨 없음)';
+  els.calendarExportLabel.appendChild(none);
+  els.calendarExportLabel.value = '';
+  els.calendarExportLabel.disabled = true;
 }
 
 function bindEvents() {
@@ -706,6 +764,7 @@ function bindEvents() {
     try {
       await signIn({ forceConsent: true });
       updateGoogleButton();
+      await refreshExportLabelSelect();
       showToast(
         'Google 계정에 연결되었습니다. Docs 저장 또는 캘린더 동기화를 사용할 수 있습니다.',
         'success'
@@ -726,6 +785,10 @@ function bindEvents() {
     } else if (result.reason === 'error') {
       showToast(result.message || 'Google Docs 저장에 실패했습니다.', 'error');
     }
+  });
+
+  els.calendarExportLabel?.addEventListener('change', () => {
+    setPreferredExportLabelId(els.calendarExportLabel.value || '');
   });
 
   els.calendarPullBtn.addEventListener('click', async () => {
@@ -782,6 +845,7 @@ export function initApp() {
   els.syncStatus = $('sync-status');
   els.saveIndicator = $('save-indicator');
   els.manualSaveBtn = $('manual-save-btn');
+  els.calendarExportLabel = $('calendar-export-label');
   els.calendarPullBtn = $('calendar-pull-btn');
   els.calendarPushBtn = $('calendar-push-btn');
   els.toast = $('toast');
@@ -800,8 +864,11 @@ export function initApp() {
     showToast(getGoogleSetupHint());
   } else {
     initGoogleAuth(
-      () => {
+      async () => {
         updateGoogleButton();
+        if (isAuthenticated()) {
+          await refreshExportLabelSelect();
+        }
       },
       (err) => {
         console.warn('Google auth init:', err);
