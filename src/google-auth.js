@@ -1,7 +1,7 @@
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/documents',
-  // calendars.get/patch(라벨) + events 에 필요 (events만으로는 라벨 메타를 못 읽음)
+  // calendars.list + events (내 캘린더 전체 동기화)
   'https://www.googleapis.com/auth/calendar',
 ].join(' ');
 

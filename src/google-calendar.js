@@ -6,17 +6,16 @@ import {
   onSignOut,
 } from './google-auth.js';
 
-const CALENDAR_ID = 'primary';
 const TIMEBOX_ORIGIN = 'timebox4';
 const TIME_SLOTS = generateTimeSlots(5, 24);
 const SLOT_MINUTES = 30;
-const EVENT_LABEL_FALLBACK_COLOR = '#8e24aa';
-const EXPORT_LABEL_STORAGE_KEY = 'timebox4_calendar_export_label_id';
+/** owner/writer 캘린더만 — 휴일 등 읽기 전용(다른 캘린더)은 제외 */
+const WRITABLE_ROLES = new Set(['owner', 'writer']);
 
-let cachedEventLabels = null;
+let cachedCalendars = null;
 
 onSignOut(() => {
-  cachedEventLabels = null;
+  cachedCalendars = null;
 });
 
 function getTimeZone() {
@@ -85,6 +84,61 @@ function calendarDayUrl(dateISO) {
   return `https://calendar.google.com/calendar/r/day/${y}/${m}/${d}`;
 }
 
+function eventClaimKey(event) {
+  return `${event._calendarId || 'primary'}:${event.id}`;
+}
+
+function eventsUrl(calendarId, eventId) {
+  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+  return eventId ? `${base}/${encodeURIComponent(eventId)}` : base;
+}
+
+/**
+ * 내 캘린더(쓰기 가능) 목록 — Money, Privacy, 가족 등.
+ * 대한민국 휴일처럼 읽기 전용인 '다른 캘린더'는 제외합니다.
+ */
+export async function listSyncCalendars({ forceRefresh = false } = {}) {
+  if (!isAuthenticated()) {
+    throw createAuthExpiredError();
+  }
+  if (!forceRefresh && Array.isArray(cachedCalendars)) {
+    return cachedCalendars;
+  }
+
+  const data = await apiFetch(
+    'https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250&showHidden=true'
+  );
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const calendars = items
+    .filter((item) => item?.id && WRITABLE_ROLES.has(item.accessRole))
+    .map((item) => ({
+      id: item.id,
+      summary: String(item.summary || item.id).trim() || item.id,
+      primary: Boolean(item.primary),
+      accessRole: item.accessRole,
+    }))
+    .sort((a, b) => {
+      if (a.primary !== b.primary) return a.primary ? -1 : 1;
+      return a.summary.localeCompare(b.summary, 'ko');
+    });
+
+  if (calendars.length === 0) {
+    calendars.push({
+      id: 'primary',
+      summary: 'primary',
+      primary: true,
+      accessRole: 'owner',
+    });
+  }
+
+  cachedCalendars = calendars;
+  return calendars;
+}
+
+function resolvePrimaryCalendarId(calendars) {
+  return calendars.find((cal) => cal.primary)?.id || calendars[0]?.id || 'primary';
+}
+
 export function mergeTimelineToBlocks(dateISO, timeline) {
   const blocks = [];
   let i = 0;
@@ -117,134 +171,7 @@ export function mergeTimelineToBlocks(dateISO, timeline) {
   return blocks;
 }
 
-function eventsUrl(eventId) {
-  const base = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}/events`;
-  const path = eventId ? `${base}/${encodeURIComponent(eventId)}` : base;
-  return `${path}?eventLabelVersion=1`;
-}
-
-function findLabelByName(labels, name) {
-  const target = String(name || '')
-    .trim()
-    .toLowerCase();
-  if (!target) return null;
-  return (
-    labels.find(
-      (label) =>
-        String(label?.name || '')
-          .trim()
-          .toLowerCase() === target
-    ) || null
-  );
-}
-
-function findLabelById(labels, id) {
-  if (id == null || id === '') return null;
-  return labels.find((label) => label?.id === id) || null;
-}
-
-export function getPreferredExportLabelId() {
-  try {
-    return localStorage.getItem(EXPORT_LABEL_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-export function setPreferredExportLabelId(labelId) {
-  try {
-    if (labelId) {
-      localStorage.setItem(EXPORT_LABEL_STORAGE_KEY, labelId);
-    } else {
-      localStorage.removeItem(EXPORT_LABEL_STORAGE_KEY);
-    }
-  } catch {
-    // localStorage unavailable
-  }
-}
-
-/** primary 캘린더의 이벤트 색상 라벨 목록을 가져옵니다. */
-export async function listEventLabels({ forceRefresh = false } = {}) {
-  if (!isAuthenticated()) {
-    throw createAuthExpiredError();
-  }
-  if (!forceRefresh && Array.isArray(cachedEventLabels)) {
-    return cachedEventLabels;
-  }
-
-  const calendar = await apiFetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}`
-  );
-  const labels = Array.isArray(calendar?.labelProperties?.eventLabels)
-    ? calendar.labelProperties.eventLabels
-        .filter((label) => label?.id)
-        .map((label) => ({
-          id: label.id,
-          name: String(label.name || '(이름 없음)').trim() || '(이름 없음)',
-          backgroundColor: label.backgroundColor || EVENT_LABEL_FALLBACK_COLOR,
-        }))
-    : [];
-
-  cachedEventLabels = labels;
-  return labels;
-}
-
-/**
- * 내보내기용 라벨 ID를 확정합니다.
- * - labelId가 목록에 있으면 그대로 사용
- * - 없으면 labelName으로 찾거나 새로 생성
- * - 둘 다 없으면 null (라벨 미지정)
- */
-export async function resolveExportLabelId({
-  labelId = '',
-  labelName = '',
-} = {}) {
-  const labels = await listEventLabels({ forceRefresh: true });
-
-  if (labelId) {
-    const byId = findLabelById(labels, labelId);
-    if (byId) return byId.id;
-  }
-
-  const name = String(labelName || '').trim();
-  if (!name) return null;
-
-  const existing = findLabelByName(labels, name);
-  if (existing?.id) return existing.id;
-
-  const newId =
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : `tb4-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
-
-  const nextLabels = [
-    ...labels,
-    {
-      id: newId,
-      backgroundColor: EVENT_LABEL_FALLBACK_COLOR,
-      name,
-    },
-  ];
-
-  await apiFetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}`,
-    {
-      method: 'PATCH',
-      body: JSON.stringify({
-        labelProperties: { eventLabels: nextLabels },
-      }),
-    }
-  );
-
-  cachedEventLabels = nextLabels.map((label) => ({
-    id: label.id,
-    name: String(label.name || '(이름 없음)').trim() || '(이름 없음)',
-    backgroundColor: label.backgroundColor || EVENT_LABEL_FALLBACK_COLOR,
-  }));
-  return newId;
-}
-
-async function listDayEvents(dateISO, { ownedOnly = false } = {}) {
+async function listDayEvents(calendarId, dateISO, { ownedOnly = false } = {}) {
   const { timeMin, timeMax } = dayRange(dateISO);
   const params = new URLSearchParams({
     singleEvents: 'true',
@@ -252,23 +179,32 @@ async function listDayEvents(dateISO, { ownedOnly = false } = {}) {
     maxResults: '2500',
     timeMin,
     timeMax,
-    eventLabelVersion: '1',
   });
 
   if (ownedOnly) {
-    // timeboxDate AND 조건은 누락 이벤트를 만들 수 있어 origin만 필터하고 날짜는 timeMin/Max로 제한
     params.append('privateExtendedProperty', `timeboxOrigin=${TIMEBOX_ORIGIN}`);
   }
 
   const data = await apiFetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}/events?${params}`
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`
   );
-  return data?.items || [];
+  return (data?.items || []).map((event) => ({
+    ...event,
+    _calendarId: calendarId,
+  }));
 }
 
-function buildEventBody(dateISO, block, eventLabelId) {
+async function listDayEventsAcrossCalendars(dateISO, { ownedOnly = false } = {}) {
+  const calendars = await listSyncCalendars();
+  const batches = await Promise.all(
+    calendars.map((cal) => listDayEvents(cal.id, dateISO, { ownedOnly }))
+  );
+  return batches.flat();
+}
+
+function buildEventBody(dateISO, block) {
   const timeZone = getTimeZone();
-  const body = {
+  return {
     summary: block.summary,
     start: { dateTime: block.startRfc, timeZone },
     end: { dateTime: block.endRfc, timeZone },
@@ -278,10 +214,7 @@ function buildEventBody(dateISO, block, eventLabelId) {
         timeboxDate: dateISO,
       },
     },
-    // 빈 문자열이면 기존 라벨 제거 (eventLabelVersion=1)
-    eventLabelId: eventLabelId || '',
   };
-  return body;
 }
 
 function isAllDayEvent(event) {
@@ -297,8 +230,7 @@ function allDayCoversDate(event, dateISO) {
 }
 
 /**
- * 외부(non-timebox4) 캘린더 일정을 반영합니다.
- * - 라벨과 무관하게 당일 primary 일정을 모두 대상
+ * 쓰기 가능한 모든 내 캘린더(primary + Money/Privacy 등)의 당일 일정을 반영합니다.
  * - 시간이 있는 일정 → 빈 타임박스 슬롯만 채움
  * - 종일 일정 → 할 일 목록에 추가(동일 제목 중복 방지)
  */
@@ -307,7 +239,7 @@ export async function pullDayToTimeline(dateISO, timeline, brainDump = []) {
     throw createAuthExpiredError();
   }
 
-  const events = await listDayEvents(dateISO, { ownedOnly: false });
+  const events = await listDayEventsAcrossCalendars(dateISO, { ownedOnly: false });
   const next = { ...timeline };
   const nextTodos = Array.isArray(brainDump) ? [...brainDump] : [];
   const existingTodoKeys = new Set(
@@ -380,26 +312,19 @@ function rangesOverlap(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && aEnd > bStart;
 }
 
-function fingerprint(summary, start) {
-  // 분 단위로 묶어 제목+시작시각 중복을 판별
-  const minute = Math.floor(start.getTime() / 60_000);
-  return `${normalizeSummary(summary)}|${minute}`;
-}
-
-/** 당일 전체 일정 + Timebox4 소유 일정을 한 번에 수집합니다. */
+/** 모든 동기화 대상 캘린더의 당일 일정을 수집합니다. */
 async function listPushContext(dateISO) {
   const [byProp, allDay] = await Promise.all([
-    listDayEvents(dateISO, { ownedOnly: true }),
-    listDayEvents(dateISO, { ownedOnly: false }),
+    listDayEventsAcrossCalendars(dateISO, { ownedOnly: true }),
+    listDayEventsAcrossCalendars(dateISO, { ownedOnly: false }),
   ]);
 
   const allMap = new Map();
   for (const event of allDay) {
-    if (event?.id) allMap.set(event.id, event);
+    if (event?.id) allMap.set(eventClaimKey(event), event);
   }
-  // ownedOnly 결과에만 있고 timeMin/Max 경계로 빠진 항목 보완
   for (const event of byProp) {
-    if (event?.id) allMap.set(event.id, event);
+    if (event?.id) allMap.set(eventClaimKey(event), event);
   }
 
   const allEvents = [...allMap.values()];
@@ -418,19 +343,19 @@ function findExistingMatch(block, events, claimedIds) {
   let overlapMatch = null;
 
   for (const event of events) {
-    if (!event?.id || claimedIds.has(event.id)) continue;
+    if (!event?.id) continue;
+    const claim = eventClaimKey(event);
+    if (claimedIds.has(claim)) continue;
     if (isAllDayEvent(event)) continue;
     if (normalizeSummary(event.summary) !== blockSummary) continue;
 
     const range = eventStartEnd(event);
     if (!range) continue;
 
-    // 1순위: 시작 시각이 같으면 동일 일정
     if (sameInstant(range.start, block.start)) {
       return event;
     }
 
-    // 2순위: 시간이 겹치면 후보 (더 긴/짧은 동일 제목 일정)
     if (
       !overlapMatch &&
       rangesOverlap(range.start, range.end, block.start, block.end)
@@ -442,132 +367,75 @@ function findExistingMatch(block, events, claimedIds) {
   return overlapMatch;
 }
 
-/** Timebox4가 만든 중복(같은 제목+시작)을 남겨둘 1개만 남기고 삭제 대상으로 모읍니다. */
-function collectOwnedDuplicateIds(owned, keepIds) {
-  const bestByFingerprint = new Map();
-  const extras = [];
-
-  for (const event of owned) {
-    if (!event?.id) continue;
-    const range = eventStartEnd(event);
-    if (!range) continue;
-    const key = fingerprint(event.summary, range.start);
-    const current = bestByFingerprint.get(key);
-
-    if (!current) {
-      bestByFingerprint.set(key, event);
-      continue;
-    }
-
-    // keepIds에 있는 쪽을 우선 보존
-    if (keepIds.has(event.id) && !keepIds.has(current.id)) {
-      extras.push(current.id);
-      bestByFingerprint.set(key, event);
-    } else {
-      extras.push(event.id);
-    }
-  }
-
-  return extras;
-}
-
 /**
  * 타임라인 블록을 캘린더에 upsert합니다.
- * - 제목+시작(또는 겹침)으로 기존 일정을 찾아 Timebox4면 수정, 외부면 생성 생략
- * - 남은 Timebox4 고아/중복 일정은 삭제
- * - options.labelId / labelName 으로 내보내기 라벨 지정 (없으면 라벨 미지정)
+ * - 모든 내 캘린더에서 매칭 검색
+ * - Timebox4 일정이면 해당 캘린더에서 수정, 외부면 생성 생략
+ * - 신규 일정은 어디에 있든 삭제하지 않음
+ * - 새 일정은 primary 캘린더에 생성
  */
-export async function pushTimelineToCalendar(dateISO, timeline, options = {}) {
+export async function pushTimelineToCalendar(dateISO, timeline) {
   if (!isAuthenticated()) {
     throw createAuthExpiredError();
   }
 
-  const exportLabelId = await resolveExportLabelId({
-    labelId: options.labelId || '',
-    labelName: options.labelName || '',
-  });
-  if (exportLabelId) {
-    setPreferredExportLabelId(exportLabelId);
-  }
-
+  const calendars = await listSyncCalendars({ forceRefresh: true });
+  const primaryId = resolvePrimaryCalendarId(calendars);
   const blocks = mergeTimelineToBlocks(dateISO, timeline);
-  const { owned, allEvents } = await listPushContext(dateISO);
-  const unusedOwned = new Set(owned.map((event) => event.id).filter(Boolean));
+  const { allEvents } = await listPushContext(dateISO);
   const claimedIds = new Set();
 
   let created = 0;
   let updated = 0;
-  let deleted = 0;
   let unchanged = 0;
   let skipped = 0;
 
   for (const block of blocks) {
-    const body = buildEventBody(dateISO, block, exportLabelId);
+    const body = buildEventBody(dateISO, block);
     const match = findExistingMatch(block, allEvents, claimedIds);
 
     if (match) {
-      claimedIds.add(match.id);
+      claimedIds.add(eventClaimKey(match));
 
       if (isTimeboxOwned(match)) {
-        unusedOwned.delete(match.id);
+        const calendarId = match._calendarId || primaryId;
         const sameSummary = (match.summary || '').trim() === block.summary;
         const range = eventStartEnd(match);
         const sameRange =
           range &&
           sameInstant(range.start, block.start) &&
           sameInstant(range.end, block.end);
-        const sameLabel =
-          (match.eventLabelId || '') === (exportLabelId || '');
 
-        if (sameSummary && sameRange && sameLabel) {
+        if (sameSummary && sameRange) {
           unchanged += 1;
         } else {
-          await apiFetch(eventsUrl(match.id), {
+          await apiFetch(eventsUrl(calendarId, match.id), {
             method: 'PATCH',
             body: JSON.stringify(body),
           });
           updated += 1;
         }
       } else {
-        // 이미 구글 캘린더에 있는 일정 → 중복 생성하지 않음
         skipped += 1;
       }
       continue;
     }
 
-    await apiFetch(eventsUrl(), {
+    await apiFetch(eventsUrl(primaryId), {
       method: 'POST',
       body: JSON.stringify(body),
     });
     created += 1;
   }
 
-  // 매칭되지 않은 Timebox4 일정 + 같은 제목·시작의 Timebox4 중복분 삭제
-  const duplicateIds = collectOwnedDuplicateIds(owned, claimedIds);
-  const toDelete = new Set();
-  for (const id of unusedOwned) {
-    if (!claimedIds.has(id)) toDelete.add(id);
-  }
-  for (const id of duplicateIds) {
-    if (!claimedIds.has(id)) toDelete.add(id);
-  }
-
-  for (const id of toDelete) {
-    await apiFetch(
-      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDAR_ID)}/events/${encodeURIComponent(id)}`,
-      { method: 'DELETE' }
-    );
-    deleted += 1;
-  }
-
   return {
     created,
     updated,
-    deleted,
+    deleted: 0,
     unchanged,
     skipped,
     total: blocks.length,
-    labelId: exportLabelId || null,
+    calendarCount: calendars.length,
     calendarUrl: calendarDayUrl(dateISO),
   };
 }

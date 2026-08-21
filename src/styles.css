@@ -70,31 +70,6 @@ body {
   align-items: center;
 }
 
-.calendar-label-picker {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.calendar-export-label {
-  height: 34px;
-  min-width: 7.5rem;
-  max-width: 10rem;
-  padding: 0 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 0.8rem;
-  font-family: inherit;
-  background: #fff;
-  color: var(--text);
-}
-
-.calendar-export-label:disabled {
-  opacity: 0.55;
-}
-
 .google-setup-notice {
   margin-bottom: 0.9rem;
   padding: 0.85rem 1rem;
@@ -366,6 +341,12 @@ body {
 
 .todo-repeat-tilde {
   color: var(--text-muted);
+}
+
+.todo-repeat-clear-btn {
+  height: 30px;
+  padding: 0 0.45rem;
+  font-size: 0.78rem;
 }
 
 .todo-repeat-badge {
