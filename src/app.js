@@ -44,6 +44,8 @@ const WEEKDAY_SHORT = ['일', '월', '화', '수', '목', '금', '토'];
 
 let currentDate = todayISO();
 let dayData = createEmptyDayData();
+/** 사용자 편집 후 아직 touch+pending 반영 전 */
+let dayDirty = false;
 let isSaving = false;
 let calendarAction = null; // 'pull' | 'push' | null
 let cloudSyncBusy = false;
@@ -93,6 +95,7 @@ function setSaveIndicator(state, text) {
 function persistLocal() {
   saveDayData(currentDate, dayData);
   queueDayForSync(currentDate);
+  dayDirty = false;
   setSaveIndicator('', '로컬 저장됨');
 }
 
@@ -100,7 +103,23 @@ const debouncedPersist = debounce(persistLocal, 400);
 
 function updateDayData(mutator) {
   mutator(dayData);
+  dayDirty = true;
   debouncedPersist();
+}
+
+/**
+ * 동기화·날짜 전환 전 메모리 flush.
+ * 편집이 없으면 updatedAt/pending을 건드리지 않아 클라우드 pull이 덮이지 않게 함.
+ */
+function flushDayBeforeSync() {
+  debouncedPersist.cancel?.();
+  if (dayDirty) {
+    saveDayData(currentDate, dayData);
+    queueDayForSync(currentDate);
+    dayDirty = false;
+  } else {
+    saveDayData(currentDate, dayData, { touch: false });
+  }
 }
 
 function formatSyncClock(date = new Date()) {
@@ -149,8 +168,7 @@ async function runDeviceCloudSync({
       }
     }
 
-    debouncedPersist.cancel?.();
-    persistLocalQuiet();
+    flushDayBeforeSync();
 
     const stripDates = dateWindowAround(currentDate, DATE_STRIP_RADIUS);
     const targetDates = dates?.length
@@ -216,8 +234,7 @@ async function runDeviceCloudSync({
 }
 
 function persistLocalQuiet() {
-  saveDayData(currentDate, dayData);
-  queueDayForSync(currentDate);
+  flushDayBeforeSync();
 }
 
 function normalizeForCompare(data) {
@@ -499,11 +516,10 @@ async function pushToCalendar() {
 function switchDate(newDateISO) {
   if (!newDateISO) return false;
 
-  debouncedPersist.cancel?.();
-  saveDayData(currentDate, dayData);
-  queueDayForSync(currentDate);
+  flushDayBeforeSync();
   currentDate = newDateISO;
   dayData = loadDayData(currentDate);
+  dayDirty = false;
 
   els.dateInput.value = currentDate;
   renderAll();

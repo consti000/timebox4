@@ -10,6 +10,7 @@ import {
   addPendingPush,
   removePendingPush,
   getPendingPushKeys,
+  isDayDataBlank,
   RECURRING_PENDING_KEY,
 } from './utils.js';
 import {
@@ -382,8 +383,18 @@ async function syncDayWithContext(ctx) {
     return { action: 'noop', conflict: false, manifestDirty: false };
   }
 
+  // 빈 로컬 + 원격 없음: 가짜 날짜 파일을 만들지 않음
+  if (!remoteMetaAt && isDayDataBlank(local)) {
+    removePendingPush(dateISO);
+    return { action: 'noop', conflict: false, manifestDirty: false };
+  }
+
+  // 빈 로컬이 원격보다 "최신"으로 보이면(구버그: empty+now) push하지 않고 pull로 복구
+  const blankLocalShouldYield =
+    Boolean(remoteMetaAt) && cmpMeta > 0 && isDayDataBlank(local);
+
   // 개선 3: 로컬이 더 최신이거나 원격 메타 없음 → 다운로드 없이 push
-  if (cmpMeta > 0 || !remoteMetaAt) {
+  if ((cmpMeta > 0 || !remoteMetaAt) && !blankLocalShouldYield) {
     const payload = dayPayload(dateISO, local);
     let fileId = resolveDayFileIdFromCache(dateISO, entry);
     try {
@@ -423,7 +434,7 @@ async function syncDayWithContext(ctx) {
     };
   }
 
-  // cmpMeta < 0: 클라우드가 더 최신 → pull (mode 무관)
+  // cmpMeta < 0 또는 blankLocalShouldYield: 클라우드 pull
   void mode;
   let fileId = resolveDayFileIdFromCache(dateISO, entry);
   if (!fileId) {
@@ -477,20 +488,39 @@ async function syncDayWithContext(ctx) {
 
   const remoteAt = remote?.updatedAt || remoteMetaAt;
   const cmp = compareUpdatedAt(local.updatedAt, remoteAt);
+  const remoteNorm = normalizeDayData(remote);
+  const localBlank = isDayDataBlank(local);
+  const remoteBlank = isDayDataBlank(remoteNorm);
+  // 빈 쪽이 더 최신 시각이어도, 내용 있는 쪽을 우선 (구버그로 빈 push된 클라우드 복구)
+  const preferLocalContent = !localBlank && remoteBlank;
+  const preferRemoteContent = localBlank && !remoteBlank;
 
-  if (cmp > 0) {
-    const payload = dayPayload(dateISO, local);
+  if ((cmp > 0 && !preferRemoteContent) || preferLocalContent) {
+    let pushLocal = local;
+    if (preferLocalContent) {
+      // 빈 클라우드를 내용으로 복구할 때 시각도 갱신해 이후 LWW가 안정되게 함
+      pushLocal = {
+        ...local,
+        updatedAt: new Date().toISOString(),
+      };
+      saveDayData(dateISO, pushLocal, { touch: false });
+    }
+    const payload = dayPayload(dateISO, pushLocal);
     await uploadJsonFile({ fileId, data: payload });
     manifest.days[dateISO] = {
-      updatedAt: local.updatedAt,
+      updatedAt: pushLocal.updatedAt,
       fileId,
     };
     removePendingPush(dateISO);
-    return { action: 'push', conflict: true, manifestDirty: true };
+    return {
+      action: 'push',
+      conflict: Boolean(cmp !== 0 || preferLocalContent),
+      manifestDirty: true,
+    };
   }
 
-  if (cmp < 0) {
-    const pulled = normalizeDayData(remote);
+  if (cmp < 0 || preferRemoteContent) {
+    const pulled = remoteNorm;
     pulled.updatedAt = remoteAt;
     saveDayData(dateISO, pulled, { touch: false });
     manifest.days[dateISO] = {

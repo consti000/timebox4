@@ -73,6 +73,9 @@ export function generateTimeSlots(startHour = 6, endHour = 23) {
   return slots;
 }
 
+/** 저장되지 않은 빈 날의 기준 시각. now를 쓰면 LWW에서 클라우드를 덮어쓴다. */
+export const EMPTY_UPDATED_AT = new Date(0).toISOString();
+
 export function createEmptyDayData() {
   return {
     priorities: [{ text: '' }, { text: '' }, { text: '' }],
@@ -80,8 +83,21 @@ export function createEmptyDayData() {
     skippedRecurringIds: [],
     timeline: {},
     memo: '',
-    updatedAt: new Date().toISOString(),
+    updatedAt: EMPTY_UPDATED_AT,
   };
+}
+
+/** 실제 입력 없는 날인지 (빈 로컬이 클라우드를 push로 지우지 않게 판별) */
+export function isDayDataBlank(data) {
+  const d = normalizeDayData(data);
+  const noPriorities = d.priorities.every((p) => !String(p.text || '').trim());
+  const noBrain = d.brainDump.length === 0;
+  const noTimeline = Object.values(d.timeline).every(
+    (v) => !String(v || '').trim()
+  );
+  const noMemo = !String(d.memo || '').trim();
+  const noSkipped = d.skippedRecurringIds.length === 0;
+  return noPriorities && noBrain && noTimeline && noMemo && noSkipped;
 }
 
 export function normalizeDayData(raw) {
@@ -132,8 +148,11 @@ export function normalizeDayData(raw) {
     skippedRecurringIds,
     timeline,
     memo: typeof raw.memo === 'string' ? raw.memo : '',
+    // 누락 시 epoch — now로 채우면 빈/구 데이터가 클라우드를 덮어씀
     updatedAt:
-      typeof raw.updatedAt === 'string' ? raw.updatedAt : empty.updatedAt,
+      typeof raw.updatedAt === 'string' && raw.updatedAt
+        ? raw.updatedAt
+        : EMPTY_UPDATED_AT,
   };
 }
 
