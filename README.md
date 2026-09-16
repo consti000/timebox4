@@ -11,6 +11,7 @@ Timebox3와는 **별도 저장소·별도 localStorage·별도 Docs 문서**를 
 - **타임박스** — 05:00~24:00, 30분 단위
 - **Brain Dump** — 자유 메모
 - **로컬 저장** — `timebox4_` prefix localStorage
+- **기기 동기화** — Google Drive `TimeBox4 Planner/sync/` JSON (자동 디바운스 + 「동기화」 버튼). 날짜 단위 LWW
 - **Google Docs** — `TimeBox4 Planner Journal` 단일 문서에 날짜 섹션 저장
 - **Google Calendar**
   - **불러오기**: timed 일정은 빈 슬롯에만 채움, **종일 일정은 할 일 목록에 추가** (Money·Privacy 등 **쓰기 가능한 내 캘린더 전체**, 기존 입력 유지, timebox4 소유 이벤트 제외)
@@ -68,6 +69,15 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 - 캘린더 동기화는 1일 단위로 현재 웹화면의 내용만 반영됨
 - 구글 캘린더의 시간대가 30분을 초과할 경우 timebox에는 2개 이상이 기록됨
 - 캘린더 불러오기, 내보내기는 '제목'과 '시작시간'만을 대조하여 중복을 제거함
+
+### 5. 기기 간 Drive JSON 동기화
+
+| 항목 | 내용 |
+|------|------|
+| 저장 위치 | Drive `TimeBox4 Planner/sync/` (`manifest.json`, `recurring.json`, `days/YYYY-MM-DD.json`) |
+| 자동 | 입력 후 약 2.5초, 날짜 전환, 탭 재표시, 온라인 복귀 시 |
+| 수동 | 헤더 **동기화** 버튼 (지금 맞추기 / 실패 후 재시도) |
+| 충돌 | 날짜·반복할일 단위로 `updatedAt`이 더 최신인 쪽이 채택 (LWW) |
 
 
 ## 배포

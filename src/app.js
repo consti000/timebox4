@@ -31,6 +31,11 @@ import {
   pullDayToTimeline,
   pushTimelineToCalendar,
 } from './google-calendar.js';
+import {
+  runCloudSync,
+  queueDayForSync,
+  queueRecurringForSync,
+} from './google-sync.js';
 
 const TIME_SLOTS = generateTimeSlots(5, 24);
 const DATE_STRIP_RADIUS = 4;
@@ -40,6 +45,8 @@ let currentDate = todayISO();
 let dayData = createEmptyDayData();
 let isSaving = false;
 let calendarAction = null; // 'pull' | 'push' | null
+let cloudSyncBusy = false;
+let lastCloudSyncError = null;
 
 const els = {};
 
@@ -84,14 +91,133 @@ function setSaveIndicator(state, text) {
 
 function persistLocal() {
   saveDayData(currentDate, dayData);
+  queueDayForSync(currentDate);
   setSaveIndicator('', '로컬 저장됨');
+  scheduleAutoCloudSync();
 }
 
 const debouncedPersist = debounce(persistLocal, 400);
+const debouncedAutoCloudSync = debounce(() => {
+  void runDeviceCloudSync({ manual: false });
+}, 2500);
+
+function scheduleAutoCloudSync() {
+  if (!isGoogleConfigured() || !isAuthenticated()) return;
+  if (!navigator.onLine) return;
+  debouncedAutoCloudSync();
+}
 
 function updateDayData(mutator) {
   mutator(dayData);
   debouncedPersist();
+}
+
+function formatSyncClock(date = new Date()) {
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/**
+ * Drive JSON 기기 동기화 (자동·수동 공용).
+ * @param {{ manual?: boolean, dates?: string[] }} options
+ */
+async function runDeviceCloudSync({ manual = false, dates = null } = {}) {
+  if (!isGoogleConfigured() || !isAuthenticated()) {
+    return { ok: false, reason: 'unauthenticated' };
+  }
+  if (isSaving || calendarAction || cloudSyncBusy) {
+    return { ok: false, reason: 'busy' };
+  }
+  if (!navigator.onLine) {
+    if (manual) {
+      showToast('오프라인입니다. 연결 후 다시 시도해 주세요.', 'error');
+    }
+    setSaveIndicator('', '오프라인 · 대기');
+    return { ok: false, reason: 'offline' };
+  }
+
+  cloudSyncBusy = true;
+  lastCloudSyncError = null;
+  updateGoogleButton();
+  if (manual) {
+    setSaveIndicator('saving', '클라우드 동기화 중...');
+  }
+
+  try {
+    debouncedPersist.cancel?.();
+    persistLocalQuiet();
+
+    const stripDates = dateWindowAround(currentDate, DATE_STRIP_RADIUS);
+    const targetDates = dates?.length
+      ? dates
+      : manual
+        ? stripDates
+        : [currentDate];
+    const localByDate = {};
+    for (const dateISO of targetDates) {
+      localByDate[dateISO] =
+        dateISO === currentDate ? { ...dayData } : loadDayData(dateISO);
+    }
+
+    const summary = await runCloudSync({
+      dates: targetDates,
+      localByDate,
+      includePending: true,
+    });
+
+    const refreshed = loadDayData(currentDate);
+    const changed =
+      refreshed.updatedAt !== dayData.updatedAt ||
+      JSON.stringify(refreshed) !== JSON.stringify(normalizeForCompare(dayData));
+    dayData = refreshed;
+    if (changed || summary.pulled > 0) {
+      renderAll();
+    }
+
+    const label = `동기화됨 ${formatSyncClock()}`;
+    setSaveIndicator('synced', label);
+    lastCloudSyncError = null;
+
+    if (manual) {
+      els.syncStatus.hidden = false;
+      els.syncStatus.className = 'sync-status success';
+      const conflictMsg =
+        summary.conflicts > 0
+          ? ` · 충돌 ${summary.conflicts}건은 최신본 유지`
+          : '';
+      els.syncStatus.textContent = `✅ 클라우드 동기화 완료 (보냄 ${summary.pushed}, 받음 ${summary.pulled})${conflictMsg}`;
+    }
+
+    return { ok: true, summary };
+  } catch (err) {
+    lastCloudSyncError = err;
+    if (isAuthExpiredError(err)) {
+      handleAuthExpired();
+      return { ok: false, reason: 'auth_expired' };
+    }
+    setSaveIndicator('', '동기화 실패');
+    if (manual) {
+      const formatted = formatGoogleApiError(err);
+      els.syncStatus.hidden = false;
+      els.syncStatus.className = 'sync-status error';
+      els.syncStatus.textContent = `❌ ${formatted.message}`;
+    }
+    return { ok: false, reason: 'error', message: err.message };
+  } finally {
+    cloudSyncBusy = false;
+    updateGoogleButton();
+  }
+}
+
+function persistLocalQuiet() {
+  saveDayData(currentDate, dayData);
+  queueDayForSync(currentDate);
+}
+
+function normalizeForCompare(data) {
+  const copy = { ...data };
+  return copy;
 }
 
 function handleAuthExpired() {
@@ -113,7 +239,7 @@ function requireGoogleReady(actionLabel) {
     showToast(`먼저 Google 로그인 후 ${actionLabel}하세요.`, 'error');
     return false;
   }
-  if (isSaving || calendarAction) {
+  if (isSaving || calendarAction || cloudSyncBusy) {
     showToast('다른 작업이 진행 중입니다. 완료될 때까지 기다려 주세요.');
     return false;
   }
@@ -125,7 +251,7 @@ async function syncToGoogle() {
     return { ok: false, reason: 'unauthenticated' };
   }
 
-  if (isSaving || calendarAction) {
+  if (isSaving || calendarAction || cloudSyncBusy) {
     return { ok: false, reason: 'busy' };
   }
 
@@ -135,7 +261,7 @@ async function syncToGoogle() {
 
   try {
     debouncedPersist.cancel?.();
-    persistLocal();
+    persistLocalQuiet();
 
     const stripDates = dateWindowAround(currentDate, DATE_STRIP_RADIUS);
     const entries = stripDates.map((dateISO) => {
@@ -187,6 +313,7 @@ async function syncToGoogle() {
   } finally {
     isSaving = false;
     updateGoogleButton();
+    scheduleAutoCloudSync();
   }
 }
 
@@ -368,8 +495,10 @@ async function pushToCalendar() {
 function switchDate(newDateISO) {
   if (!newDateISO) return false;
 
+  const previousDate = currentDate;
   debouncedPersist.cancel?.();
   saveDayData(currentDate, dayData);
+  queueDayForSync(currentDate);
   currentDate = newDateISO;
   dayData = loadDayData(currentDate);
 
@@ -377,6 +506,18 @@ function switchDate(newDateISO) {
   renderAll();
   setSaveIndicator('', '로컬 저장됨');
   els.syncStatus.hidden = true;
+
+  if (isAuthenticated()) {
+    void runDeviceCloudSync({
+      manual: false,
+      dates: [previousDate, currentDate],
+    }).then((result) => {
+      if (result.ok && result.summary?.pulled > 0) {
+        dayData = loadDayData(currentDate);
+        renderAll();
+      }
+    });
+  }
 
   return true;
 }
@@ -484,6 +625,8 @@ function setTodoDone(item, done) {
 function deleteTodo(item) {
   if (item.recurringId != null) {
     removeRecurringTodo(item.recurringId);
+    queueRecurringForSync();
+    scheduleAutoCloudSync();
     updateDayData((d) => {
       d.brainDump = d.brainDump.filter((todo) => todo.recurringId !== item.recurringId);
     });
@@ -598,7 +741,7 @@ function updateGoogleButton() {
   els.manualSaveBtn.hidden = false;
   renderGoogleSetupNotice();
 
-  const busy = isSaving || Boolean(calendarAction);
+  const busy = isSaving || Boolean(calendarAction) || cloudSyncBusy;
   const ready = isGoogleConfigured() && isAuthenticated();
 
   if (!isGoogleConfigured()) {
@@ -607,6 +750,10 @@ function updateGoogleButton() {
     els.googleAuthBtn.classList.remove('connected');
     els.manualSaveBtn.disabled = true;
     els.manualSaveBtn.textContent = '구글 닥스에 저장';
+    if (els.cloudSyncBtn) {
+      els.cloudSyncBtn.disabled = true;
+      els.cloudSyncBtn.textContent = '동기화';
+    }
     els.calendarPullBtn.disabled = true;
     els.calendarPushBtn.disabled = true;
     return;
@@ -615,6 +762,10 @@ function updateGoogleButton() {
   els.googleAuthBtn.disabled = busy;
   els.manualSaveBtn.disabled = busy || !ready;
   els.manualSaveBtn.textContent = isSaving ? '저장 중...' : '구글 닥스에 저장';
+  if (els.cloudSyncBtn) {
+    els.cloudSyncBtn.disabled = busy || !ready;
+    els.cloudSyncBtn.textContent = cloudSyncBusy ? '동기화 중...' : '동기화';
+  }
   els.calendarPullBtn.disabled = busy || !ready;
   els.calendarPushBtn.disabled = busy || !ready;
   els.calendarPullBtn.textContent =
@@ -658,6 +809,8 @@ function bindEvents() {
         showToast('반복 기간이 올바르지 않습니다.', 'error');
         return;
       }
+      queueRecurringForSync();
+      scheduleAutoCloudSync();
       els.brainDumpInput.value = '';
       renderBrainDump();
       showToast(
@@ -708,9 +861,13 @@ function bindEvents() {
       await signIn({ forceConsent: true });
       updateGoogleButton();
       showToast(
-        'Google 계정에 연결되었습니다. Docs 저장 또는 캘린더 동기화를 사용할 수 있습니다.',
+        'Google 계정에 연결되었습니다. 기기 동기화·Docs·캘린더를 사용할 수 있습니다.',
         'success'
       );
+      const syncResult = await runDeviceCloudSync({ manual: true });
+      if (syncResult.ok) {
+        showToast('클라우드와 동기화했습니다.', 'success');
+      }
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -726,6 +883,30 @@ function bindEvents() {
       showToast('저장 중입니다. 잠시 후 최신 내용이 반영됩니다.');
     } else if (result.reason === 'error') {
       showToast(result.message || 'Google Docs 저장에 실패했습니다.', 'error');
+    }
+  });
+
+  els.cloudSyncBtn?.addEventListener('click', async () => {
+    if (!requireGoogleReady('동기화')) return;
+    try {
+      await refreshTokenInUserGesture();
+    } catch (err) {
+      showToast(err.message || '인증에 실패했습니다.', 'error');
+      return;
+    }
+    const result = await runDeviceCloudSync({ manual: true });
+    if (result.ok) {
+      const s = result.summary;
+      const conflictMsg =
+        s?.conflicts > 0 ? ` 충돌 ${s.conflicts}건은 최신본을 유지했습니다.` : '';
+      showToast(
+        `클라우드와 맞췄습니다. (보냄 ${s.pushed}, 받음 ${s.pulled})${conflictMsg}`,
+        'success'
+      );
+    } else if (result.reason === 'busy') {
+      showToast('다른 작업이 진행 중입니다. 잠시 후 다시 시도해 주세요.');
+    } else if (result.reason === 'error') {
+      showToast(result.message || '동기화에 실패했습니다. 다시 시도해 주세요.', 'error');
     }
   });
 
@@ -790,6 +971,7 @@ export function initApp() {
   els.syncStatus = $('sync-status');
   els.saveIndicator = $('save-indicator');
   els.manualSaveBtn = $('manual-save-btn');
+  els.cloudSyncBtn = $('cloud-sync-btn');
   els.calendarPullBtn = $('calendar-pull-btn');
   els.calendarPushBtn = $('calendar-push-btn');
   els.toast = $('toast');
@@ -801,6 +983,15 @@ export function initApp() {
   bindEvents();
   updateGoogleButton();
 
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && isAuthenticated()) {
+      scheduleAutoCloudSync();
+    }
+  });
+  window.addEventListener('online', () => {
+    if (isAuthenticated()) scheduleAutoCloudSync();
+  });
+
   if (!isGoogleConfigured()) {
     els.syncStatus.hidden = false;
     els.syncStatus.className = 'sync-status';
@@ -810,6 +1001,9 @@ export function initApp() {
     initGoogleAuth(
       () => {
         updateGoogleButton();
+        if (isAuthenticated()) {
+          void runDeviceCloudSync({ manual: false });
+        }
       },
       (err) => {
         console.warn('Google auth init:', err);

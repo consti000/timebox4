@@ -138,6 +138,76 @@ export function normalizeDayData(raw) {
 }
 
 const RECURRING_TODOS_KEY = `${STORAGE_PREFIX}recurring_todos`;
+const RECURRING_UPDATED_AT_KEY = `${STORAGE_PREFIX}recurring_updated_at`;
+const DEVICE_ID_KEY = `${STORAGE_PREFIX}device_id`;
+const PENDING_PUSH_KEY = `${STORAGE_PREFIX}pending_push`;
+export const RECURRING_PENDING_KEY = '__recurring__';
+
+export function getDeviceId() {
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (id) return id;
+    id =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? `tb4_${crypto.randomUUID()}`
+        : `tb4_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(DEVICE_ID_KEY, id);
+    return id;
+  } catch {
+    return 'tb4_unknown';
+  }
+}
+
+export function getPendingPushKeys() {
+  try {
+    const raw = localStorage.getItem(PENDING_PUSH_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((k) => typeof k === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingPushKeys(keys) {
+  try {
+    localStorage.setItem(PENDING_PUSH_KEY, JSON.stringify([...new Set(keys)]));
+  } catch {
+    // ignore
+  }
+}
+
+export function addPendingPush(key) {
+  if (!key) return;
+  const keys = getPendingPushKeys();
+  if (!keys.includes(key)) {
+    keys.push(key);
+    writePendingPushKeys(keys);
+  }
+}
+
+export function removePendingPush(key) {
+  writePendingPushKeys(getPendingPushKeys().filter((k) => k !== key));
+}
+
+export function getRecurringUpdatedAt() {
+  try {
+    return localStorage.getItem(RECURRING_UPDATED_AT_KEY) || new Date(0).toISOString();
+  } catch {
+    return new Date(0).toISOString();
+  }
+}
+
+export function setRecurringUpdatedAt(iso) {
+  try {
+    localStorage.setItem(
+      RECURRING_UPDATED_AT_KEY,
+      typeof iso === 'string' && iso ? iso : new Date().toISOString()
+    );
+  } catch {
+    // ignore
+  }
+}
 
 function normalizeRecurringTodo(item) {
   const text = typeof item?.text === 'string' ? item.text.trim() : '';
@@ -173,6 +243,13 @@ export function saveRecurringTodos(items) {
   return normalized;
 }
 
+/** 로컬에서 반복 할 일을 바꿀 때 updatedAt을 갱신합니다. */
+export function saveRecurringTodosLocal(items) {
+  const normalized = saveRecurringTodos(items);
+  setRecurringUpdatedAt(new Date().toISOString());
+  return normalized;
+}
+
 export function addRecurringTodo({ text, startDate, endDate }) {
   const next = normalizeRecurringTodo({
     id: Date.now() + Math.random(),
@@ -183,13 +260,13 @@ export function addRecurringTodo({ text, startDate, endDate }) {
   if (!next) return null;
   const items = loadRecurringTodos();
   items.push(next);
-  saveRecurringTodos(items);
+  saveRecurringTodosLocal(items);
   return next;
 }
 
 export function removeRecurringTodo(id) {
   const items = loadRecurringTodos().filter((item) => item.id !== id);
-  saveRecurringTodos(items);
+  saveRecurringTodosLocal(items);
 }
 
 export function recurringCoversDate(item, dateISO) {
@@ -248,9 +325,13 @@ export function loadDayData(dateISO) {
   }
 }
 
-export function saveDayData(dateISO, data) {
+export function saveDayData(dateISO, data, { touch = true } = {}) {
   const normalized = normalizeDayData(data);
-  normalized.updatedAt = new Date().toISOString();
+  if (touch) {
+    normalized.updatedAt = new Date().toISOString();
+  } else if (typeof data?.updatedAt === 'string' && data.updatedAt) {
+    normalized.updatedAt = data.updatedAt;
+  }
   Object.assign(data, normalized);
   localStorage.setItem(`${STORAGE_PREFIX}${dateISO}`, JSON.stringify(normalized));
 }
