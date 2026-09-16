@@ -111,9 +111,13 @@ function formatSyncClock(date = new Date()) {
 
 /**
  * Drive JSON 기기 동기화 (자동·수동 공용).
- * @param {{ manual?: boolean, dates?: string[] }} options
+ * @param {{ manual?: boolean, dates?: string[], skipTokenRefresh?: boolean }} options
  */
-async function runDeviceCloudSync({ manual = false, dates = null } = {}) {
+async function runDeviceCloudSync({
+  manual = false,
+  dates = null,
+  skipTokenRefresh = false,
+} = {}) {
   if (!isGoogleConfigured() || !isAuthenticated()) {
     return { ok: false, reason: 'unauthenticated' };
   }
@@ -136,11 +140,13 @@ async function runDeviceCloudSync({ manual = false, dates = null } = {}) {
   }
 
   try {
-    // 동기화 시작 전 토큰을 조용히 갱신해 중도 401→로그아웃을 줄임
-    try {
-      await refreshAccessToken({ interactive: false });
-    } catch {
-      // 제스처 없이 실패할 수 있음. 기존 토큰으로 진행하고 apiFetch가 재시도
+    // 로그인 직후에는 토큰이 이미 있어 재요청 시 GIS 콜백이 안 오고 멈출 수 있음
+    if (!skipTokenRefresh) {
+      try {
+        await refreshAccessToken({ interactive: false, timeoutMs: 10000 });
+      } catch {
+        // 기존 토큰으로 진행. apiFetch 401 시 재시도
+      }
     }
 
     debouncedPersist.cancel?.();
@@ -847,9 +853,17 @@ function bindEvents() {
         'Google 계정에 연결되었습니다. 기기 동기화·Docs·캘린더를 사용할 수 있습니다.',
         'success'
       );
-      const syncResult = await runDeviceCloudSync({ manual: true });
+      const syncResult = await runDeviceCloudSync({
+        manual: true,
+        skipTokenRefresh: true,
+      });
       if (syncResult.ok) {
         showToast('클라우드와 동기화했습니다.', 'success');
+      } else if (syncResult.reason === 'error') {
+        showToast(
+          syncResult.message || '로그인 후 동기화에 실패했습니다.',
+          'error'
+        );
       }
     } catch (err) {
       showToast(err.message, 'error');
@@ -877,7 +891,10 @@ function bindEvents() {
       showToast(err.message || '인증에 실패했습니다.', 'error');
       return;
     }
-    const result = await runDeviceCloudSync({ manual: true });
+    const result = await runDeviceCloudSync({
+      manual: true,
+      skipTokenRefresh: true,
+    });
     if (result.ok) {
       const s = result.summary;
       const conflictMsg =

@@ -269,11 +269,14 @@ export function initGoogleAuth(onSuccess, onError) {
 
 /**
  * 액세스 토큰을 갱신합니다. 동시 호출은 하나의 갱신으로 합칩니다.
- * @param {{ interactive?: boolean }} [options]
+ * GIS가 콜백을 안 주는 경우(로그인 직후 재요청 등)에 대비해 타임아웃을 둡니다.
+ * @param {{ interactive?: boolean, timeoutMs?: number }} [options]
  * @returns {Promise<string>} access token
  */
 export function refreshAccessToken(options = {}) {
   const interactive = Boolean(options.interactive);
+  const timeoutMs =
+    typeof options.timeoutMs === 'number' ? options.timeoutMs : 12000;
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = new Promise((resolve, reject) => {
@@ -282,9 +285,27 @@ export function refreshAccessToken(options = {}) {
       return;
     }
 
+    let settled = false;
+    const finish = (fn) => (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+
+    const timer = setTimeout(() => {
+      finish(reject)(
+        new Error(
+          'Google 토큰 갱신 시간이 초과되었습니다. 다시 로그인해 주세요.'
+        )
+      );
+    }, timeoutMs);
+
     tokenClient.callback = (response) => {
       if (response.error) {
-        reject(new Error(response.error_description || response.error));
+        finish(reject)(
+          new Error(response.error_description || response.error)
+        );
         return;
       }
       accessToken = response.access_token;
@@ -295,10 +316,10 @@ export function refreshAccessToken(options = {}) {
       if (grantedScope && !hasCalendarScope(grantedScope)) {
         accessToken = null;
         grantedScope = '';
-        reject(createScopeError());
+        finish(reject)(createScopeError());
         return;
       }
-      resolve(accessToken);
+      finish(resolve)(accessToken);
     };
 
     try {
@@ -306,7 +327,7 @@ export function refreshAccessToken(options = {}) {
         prompt: interactive ? 'consent' : '',
       });
     } catch (err) {
-      reject(err);
+      finish(reject)(err);
     }
   }).finally(() => {
     refreshInFlight = null;
