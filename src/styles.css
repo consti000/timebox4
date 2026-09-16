@@ -163,8 +163,8 @@ body {
 }
 
 .date-chip.is-today {
-  border-color: var(--primary);
-  color: var(--primary);
+  border: 3px solid #f97316;
+  color: #c2410c;
 }
 
 .date-chip.is-selected {
@@ -175,7 +175,7 @@ body {
 
 .date-chip.is-selected.is-today {
   background: var(--primary);
-  border-color: var(--primary);
+  border: 3px solid #f97316;
   color: #fff;
 }
 
