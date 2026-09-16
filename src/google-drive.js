@@ -32,14 +32,20 @@ const TABLE_HEADER_BG = '#edeef5';
 /**
  * 2열 표 첫 열 너비.
  * Docs HTML 변환은 colgroup/%를 무시해 균등(~50%)이 되므로,
- * 업로드 후 Docs API로 FIXED_WIDTH를 적용합니다. (기존 균등폭의 약 25%)
- * 둘째 열은 (본문 가용 폭 − 첫 열)로 확대해 표가 페이지 폭을 다시 채우게 합니다.
+ * 업로드 후 Docs API로 FIXED_WIDTH를 적용합니다.
  */
-const NARROW_FIRST_COL_PT = 58;
-const NARROW_FIRST_COL_PCT = 12;
-const WIDE_SECOND_COL_PCT = 88;
-/** documentStyle을 못 읽을 때 쓰는 기본 본문 폭 (US Letter 여백≈1") */
-const DEFAULT_TWO_COL_TABLE_WIDTH_PT = 468;
+const NARROW_FIRST_COL_PT = 42;
+const NARROW_FIRST_COL_PCT = 10;
+const WIDE_SECOND_COL_PCT = 90;
+/** 타임박스 2단(4열)의 시간 열 */
+const NARROW_TIME_COL_PT = 34;
+/** 한 페이지 밀도를 위한 여백 (약 0.5") */
+const PAGE_MARGIN_PT = 36;
+/** documentStyle을 못 읽을 때 쓰는 기본 본문 폭 (Letter − 좌우 0.5") */
+const DEFAULT_TWO_COL_TABLE_WIDTH_PT = 540;
+const COMPACT_FONT_PT = 9;
+const COMPACT_TITLE_FONT_PT = 12;
+const COMPACT_HEADING_FONT_PT = 10;
 
 let folderId = null;
 let masterDocId = null;
@@ -210,17 +216,25 @@ function renderTableHtml(headers, rows, columnWidths) {
       : headers.map(() => Math.floor(100 / Math.max(headers.length, 1)));
 
   const twoCol = headers.length === 2;
+  const fourColTimeline = headers.length === 4;
   const displayHeaders = headers.map(formatSpreadHeaderLabel);
 
   const colgroup = `<colgroup>${widths
     .map((w, i) => {
-      const pt =
-        twoCol && i === 0 ? `${NARROW_FIRST_COL_PT}pt` : `${w}%`;
+      let pt;
+      if (twoCol && i === 0) pt = `${NARROW_FIRST_COL_PT}pt`;
+      else if (fourColTimeline && (i === 0 || i === 2))
+        pt = `${NARROW_TIME_COL_PT}pt`;
+      else pt = `${w}%`;
       return `<col width="${pt}" style="width:${pt}">`;
     })
     .join('')}</colgroup>`;
 
   const horizontalAlign = (index, isHeader) => {
+    if (fourColTimeline) {
+      if (isHeader) return 'center';
+      return index === 0 || index === 2 ? 'center' : 'left';
+    }
     if (twoCol) {
       return isHeader || index === 0 ? 'center' : 'left';
     }
@@ -229,16 +243,19 @@ function renderTableHtml(headers, rows, columnWidths) {
 
   const cellStyle = (index, isHeader) => {
     const w = widths[index] ?? '';
-    const widthCss =
-      twoCol && index === 0
-        ? `width:${NARROW_FIRST_COL_PT}pt`
-        : `width:${w}%`;
+    let widthCss;
+    if (twoCol && index === 0) widthCss = `width:${NARROW_FIRST_COL_PT}pt`;
+    else if (fourColTimeline && (index === 0 || index === 2))
+      widthCss = `width:${NARROW_TIME_COL_PT}pt`;
+    else widthCss = `width:${w}%`;
     const align = horizontalAlign(index, isHeader);
-    return `border:1px solid #ccc;padding:6px;${widthCss};text-align:${align};vertical-align:middle`;
+    return `border:1px solid #ccc;padding:2px 4px;font-size:${COMPACT_FONT_PT}pt;line-height:1.15;${widthCss};text-align:${align};vertical-align:middle`;
   };
 
   const cellWidthAttr = (index) => {
     if (twoCol && index === 0) return `${NARROW_FIRST_COL_PT}pt`;
+    if (fourColTimeline && (index === 0 || index === 2))
+      return `${NARROW_TIME_COL_PT}pt`;
     return `${widths[index]}%`;
   };
 
@@ -261,7 +278,26 @@ function renderTableHtml(headers, rows, columnWidths) {
     )
     .join('');
 
-  return `<table style="border-collapse:collapse;table-layout:fixed;width:100%;margin:8px 0 16px">${colgroup}${head}${body}</table>`;
+  return `<table style="border-collapse:collapse;table-layout:fixed;width:100%;margin:2px 0 6px;font-size:${COMPACT_FONT_PT}pt">${colgroup}${head}${body}</table>`;
+}
+
+/** 타임박스 슬롯을 좌·우 2단(4열)으로 배열. 빈 슬롯도 유지. */
+function buildTimelineTwoPaneRows(timeline) {
+  const mid = Math.ceil(TIME_SLOTS.length / 2);
+  const left = TIME_SLOTS.slice(0, mid);
+  const right = TIME_SLOTS.slice(mid);
+  const rows = [];
+  for (let i = 0; i < left.length; i += 1) {
+    const lt = left[i];
+    const rt = right[i];
+    rows.push([
+      lt,
+      timeline?.[lt]?.trim() || '',
+      rt || '',
+      rt ? timeline?.[rt]?.trim() || '' : '',
+    ]);
+  }
+  return rows;
 }
 
 function buildDateSectionHtml(dateISO, data) {
@@ -283,28 +319,29 @@ function buildDateSectionHtml(dateISO, data) {
     ]);
   }
 
-  const timelineRows = TIME_SLOTS.map((time) => [
-    time,
-    data.timeline?.[time]?.trim() || '',
-  ]);
-
+  const timelineRows = buildTimelineTwoPaneRows(data.timeline);
   const memoText = data.memo?.trim() || '(메모 없음)';
   const footer = `마지막 저장: ${new Date().toLocaleString('ko-KR')}`;
   const narrowTwoCol = [NARROW_FIRST_COL_PCT, WIDE_SECOND_COL_PCT];
+  const timelineFourCol = [10, 40, 10, 40];
 
   return [
-    `<p>${escapeHtml(sectionStartMarker(dateISO))}</p>`,
-    `<h1>${escapeHtml(title)}</h1>`,
-    `<h3>Top 3 우선순위</h3>`,
+    `<p style="font-size:1pt;color:#fff;margin:0;line-height:1">${escapeHtml(sectionStartMarker(dateISO))}</p>`,
+    `<p style="font-size:${COMPACT_TITLE_FONT_PT}pt;font-weight:700;margin:2px 0 4px;line-height:1.2">${escapeHtml(title)}</p>`,
+    `<p style="font-size:${COMPACT_HEADING_FONT_PT}pt;font-weight:600;margin:4px 0 1px;line-height:1.2">Top 3 우선순위</p>`,
     renderTableHtml(['우선순위', '내용'], priorityRows, narrowTwoCol),
-    `<h3>할 일 목록</h3>`,
+    `<p style="font-size:${COMPACT_HEADING_FONT_PT}pt;font-weight:600;margin:4px 0 1px;line-height:1.2">할 일 목록</p>`,
     renderTableHtml(['상태', '할 일'], todoRows, narrowTwoCol),
-    `<h3>타임박스 (05:00 - 24:00)</h3>`,
-    renderTableHtml(['시간', '계획'], timelineRows, narrowTwoCol),
-    `<h3>Brain Dump</h3>`,
+    `<p style="font-size:${COMPACT_HEADING_FONT_PT}pt;font-weight:600;margin:4px 0 1px;line-height:1.2">타임박스 (05:00 - 24:00) · 2단</p>`,
+    renderTableHtml(
+      ['시간', '계획', '시간', '계획'],
+      timelineRows,
+      timelineFourCol
+    ),
+    `<p style="font-size:${COMPACT_HEADING_FONT_PT}pt;font-weight:600;margin:4px 0 1px;line-height:1.2">Brain Dump</p>`,
     renderTableHtml(['내용'], [[memoText]]),
-    `<p>${escapeHtml(footer)}</p>`,
-    `<p>${escapeHtml(sectionEndMarker(dateISO))}</p>`,
+    `<p style="font-size:8pt;color:#666;margin:2px 0;line-height:1.2">${escapeHtml(footer)}</p>`,
+    `<p style="font-size:1pt;color:#fff;margin:0;line-height:1">${escapeHtml(sectionEndMarker(dateISO))}</p>`,
   ].join('\n');
 }
 
@@ -385,6 +422,7 @@ function cellVerticalAlignRequest(tableStartIndex, rowIndex, columnIndex) {
 /**
  * HTML 변환 후에도 표 셀 정렬이 풀리는 경우가 있어 Docs API로 재적용합니다.
  * - 2열: 헤더·첫 열 가운데, 둘째 열 본문 왼쪽
+ * - 4열(타임박스 2단): 헤더·시간 열 가운데, 계획 열 왼쪽
  * - 1열(Brain Dump): 헤더 가운데, 본문 왼쪽
  */
 function buildTableFormattingRequests(doc) {
@@ -395,7 +433,7 @@ function buildTableFormattingRequests(doc) {
     const rows = el.table.tableRows || [];
     const colCount =
       el.table.columns ?? rows[0]?.tableCells?.length ?? 0;
-    if (colCount !== 1 && colCount !== 2) continue;
+    if (colCount !== 1 && colCount !== 2 && colCount !== 4) continue;
 
     rows.forEach((row, rowIndex) => {
       row.tableCells?.forEach((cell, colIndex) => {
@@ -405,6 +443,10 @@ function buildTableFormattingRequests(doc) {
         let alignment = 'START';
         if (colCount === 1) {
           alignment = rowIndex === 0 ? 'CENTER' : 'START';
+        } else if (colCount === 4) {
+          if (rowIndex === 0 || colIndex === 0 || colIndex === 2) {
+            alignment = 'CENTER';
+          }
         } else if (rowIndex === 0 || colIndex === 0) {
           alignment = 'CENTER';
         }
@@ -500,11 +542,7 @@ function fixedColumnWidthRequest(tableStartIndex, columnIndex, widthPt) {
 }
 
 /**
- * 2열 표(우선순위/상태/시간)의 첫 열을 좁히고,
- * 줄인 만큼 둘째 열을 넓혀 표 전체 너비는 본문 폭으로 복원합니다.
- *
- * 주의: 현재 열 합을 쓰면 안 됩니다. 첫 열만 줄인 뒤 Docs는 둘째 열을
- * 늘리지 않고 표 총폭을 줄이므로, 줄어든 합으로 재계산하면 둘째 열이 그대로입니다.
+ * 2열 표(우선순위/상태)의 첫 열을 좁히고 둘째 열을 본문 폭에 맞게 넓힙니다.
  */
 async function narrowTwoColumnTableFirstCols(docId) {
   const doc = await getDocument(docId);
@@ -523,11 +561,98 @@ async function narrowTwoColumnTableFirstCols(docId) {
     const first = Math.min(NARROW_FIRST_COL_PT, total - 40);
     const second = Math.max(total - first, 40);
 
-    // 둘째 열을 먼저 본문 폭 기준으로 넓힌 뒤, 첫 열을 좁힙니다.
     requests.push(
       fixedColumnWidthRequest(el.startIndex, 1, second),
       fixedColumnWidthRequest(el.startIndex, 0, first)
     );
+  }
+
+  if (requests.length) {
+    await batchUpdate(docId, requests);
+  }
+}
+
+/**
+ * 타임박스 4열(시간|계획|시간|계획) 열 너비를 본문 폭에 맞게 고정합니다.
+ */
+async function narrowFourColumnTimelineTables(docId) {
+  const doc = await getDocument(docId);
+  const contentWidth = getDocumentContentWidthPt(doc);
+  const requests = [];
+
+  for (const el of doc.body?.content || []) {
+    if (!el.table || el.startIndex == null) continue;
+    const colCount =
+      el.table.columns ??
+      el.table.tableRows?.[0]?.tableCells?.length ??
+      0;
+    if (colCount !== 4) continue;
+
+    const timeW = Math.min(NARROW_TIME_COL_PT, 48);
+    const planW = Math.max((contentWidth - timeW * 2) / 2, 40);
+
+    requests.push(
+      fixedColumnWidthRequest(el.startIndex, 0, timeW),
+      fixedColumnWidthRequest(el.startIndex, 1, planW),
+      fixedColumnWidthRequest(el.startIndex, 2, timeW),
+      fixedColumnWidthRequest(el.startIndex, 3, planW)
+    );
+  }
+
+  if (requests.length) {
+    await batchUpdate(docId, requests);
+  }
+}
+
+/** 날짜 한 페이지 밀도를 위해 여백을 줄입니다. */
+async function applyCompactPageMargins(docId) {
+  const margin = { magnitude: PAGE_MARGIN_PT, unit: 'PT' };
+  await batchUpdate(docId, [
+    {
+      updateDocumentStyle: {
+        documentStyle: {
+          marginTop: margin,
+          marginBottom: margin,
+          marginLeft: margin,
+          marginRight: margin,
+        },
+        fields: 'marginTop,marginBottom,marginLeft,marginRight',
+      },
+    },
+  ]);
+}
+
+/**
+ * HTML 변환 후에도 글자 크기가 커지는 경우가 있어 본문·표를 압축 크기로 맞춥니다.
+ */
+async function applyCompactTextStyles(docId) {
+  const doc = await getDocument(docId);
+  const requests = [];
+  const bodyEnd = doc.body?.content?.length
+    ? doc.body.content[doc.body.content.length - 1]?.endIndex
+    : null;
+
+  if (typeof bodyEnd === 'number' && bodyEnd > 1) {
+    requests.push({
+      updateTextStyle: {
+        range: { startIndex: 1, endIndex: bodyEnd - 1 },
+        textStyle: {
+          fontSize: { magnitude: COMPACT_FONT_PT, unit: 'PT' },
+        },
+        fields: 'fontSize',
+      },
+    });
+    requests.push({
+      updateParagraphStyle: {
+        range: { startIndex: 1, endIndex: bodyEnd - 1 },
+        paragraphStyle: {
+          lineSpacing: 100,
+          spaceAbove: { magnitude: 0, unit: 'PT' },
+          spaceBelow: { magnitude: 2, unit: 'PT' },
+        },
+        fields: 'lineSpacing,spaceAbove,spaceBelow',
+      },
+    });
   }
 
   if (requests.length) {
@@ -616,7 +741,12 @@ function buildMergedJournalHtml(entries, existingSections) {
   return {
     html: `<!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><title>Timebox Planner Journal</title></head>
+<head><meta charset="UTF-8"><title>Timebox Planner Journal</title>
+<style>
+body{font-size:${COMPACT_FONT_PT}pt;line-height:1.15;margin:0}
+table{font-size:${COMPACT_FONT_PT}pt}
+</style>
+</head>
 <body>
 ${parts.join('\n')}
 </body>
@@ -687,8 +817,11 @@ export async function saveToGoogleDocs(entries) {
   );
 
   await replaceDocumentWithHtml(docId, html);
+  await applyCompactPageMargins(docId);
   await insertPageBreaksBetweenDates(docId, dates);
   await narrowTwoColumnTableFirstCols(docId);
+  await narrowFourColumnTimelineTables(docId);
+  await applyCompactTextStyles(docId);
   await applyTableFormatting(docId);
 
   const finalDoc = await getDocument(docId);
