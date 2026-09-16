@@ -25,6 +25,7 @@ import {
   signIn,
   signOut,
   resignInWithCalendarConsent,
+  refreshAccessToken,
   saveToGoogleDocs,
 } from './google-drive.js';
 import {
@@ -93,19 +94,9 @@ function persistLocal() {
   saveDayData(currentDate, dayData);
   queueDayForSync(currentDate);
   setSaveIndicator('', '로컬 저장됨');
-  scheduleAutoCloudSync();
 }
 
 const debouncedPersist = debounce(persistLocal, 400);
-const debouncedAutoCloudSync = debounce(() => {
-  void runDeviceCloudSync({ manual: false });
-}, 2500);
-
-function scheduleAutoCloudSync() {
-  if (!isGoogleConfigured() || !isAuthenticated()) return;
-  if (!navigator.onLine) return;
-  debouncedAutoCloudSync();
-}
 
 function updateDayData(mutator) {
   mutator(dayData);
@@ -145,6 +136,13 @@ async function runDeviceCloudSync({ manual = false, dates = null } = {}) {
   }
 
   try {
+    // 동기화 시작 전 토큰을 조용히 갱신해 중도 401→로그아웃을 줄임
+    try {
+      await refreshAccessToken({ interactive: false });
+    } catch {
+      // 제스처 없이 실패할 수 있음. 기존 토큰으로 진행하고 apiFetch가 재시도
+    }
+
     debouncedPersist.cancel?.();
     persistLocalQuiet();
 
@@ -314,7 +312,6 @@ async function syncToGoogle() {
   } finally {
     isSaving = false;
     updateGoogleButton();
-    scheduleAutoCloudSync();
   }
 }
 
@@ -323,7 +320,7 @@ async function syncToGoogle() {
  * 노트북은 API 실패 뒤 늦게 consent 팝업을 띄우면 차단되는 경우가 많습니다.
  */
 async function refreshTokenInUserGesture() {
-  await signIn({ forceConsent: false });
+  await refreshAccessToken({ interactive: false });
   updateGoogleButton();
 }
 
@@ -496,7 +493,6 @@ async function pushToCalendar() {
 function switchDate(newDateISO) {
   if (!newDateISO) return false;
 
-  const previousDate = currentDate;
   debouncedPersist.cancel?.();
   saveDayData(currentDate, dayData);
   queueDayForSync(currentDate);
@@ -507,18 +503,6 @@ function switchDate(newDateISO) {
   renderAll();
   setSaveIndicator('', '로컬 저장됨');
   els.syncStatus.hidden = true;
-
-  if (isAuthenticated()) {
-    void runDeviceCloudSync({
-      manual: false,
-      dates: [previousDate, currentDate],
-    }).then((result) => {
-      if (result.ok && result.summary?.pulled > 0) {
-        dayData = loadDayData(currentDate);
-        renderAll();
-      }
-    });
-  }
 
   return true;
 }
@@ -627,7 +611,6 @@ function deleteTodo(item) {
   if (item.recurringId != null) {
     removeRecurringTodo(item.recurringId);
     queueRecurringForSync();
-    scheduleAutoCloudSync();
     updateDayData((d) => {
       d.brainDump = d.brainDump.filter((todo) => todo.recurringId !== item.recurringId);
     });
@@ -811,7 +794,6 @@ function bindEvents() {
         return;
       }
       queueRecurringForSync();
-      scheduleAutoCloudSync();
       els.brainDumpInput.value = '';
       renderBrainDump();
       showToast(
@@ -984,15 +966,6 @@ export function initApp() {
   bindEvents();
   updateGoogleButton();
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && isAuthenticated()) {
-      scheduleAutoCloudSync();
-    }
-  });
-  window.addEventListener('online', () => {
-    if (isAuthenticated()) scheduleAutoCloudSync();
-  });
-
   if (!isGoogleConfigured()) {
     els.syncStatus.hidden = false;
     els.syncStatus.className = 'sync-status';
@@ -1002,9 +975,6 @@ export function initApp() {
     initGoogleAuth(
       () => {
         updateGoogleButton();
-        if (isAuthenticated()) {
-          void runDeviceCloudSync({ manual: false });
-        }
       },
       (err) => {
         console.warn('Google auth init:', err);

@@ -14,6 +14,8 @@ const PLACEHOLDER_CLIENT_ID = 'your-client-id.apps.googleusercontent.com';
 let accessToken = null;
 let grantedScope = '';
 let tokenClient = null;
+/** @type {Promise<string> | null} */
+let refreshInFlight = null;
 const signOutListeners = new Set();
 
 export function getGoogleClientId() {
@@ -266,35 +268,60 @@ export function initGoogleAuth(onSuccess, onError) {
 }
 
 /**
- * @param {{ forceConsent?: boolean }} [options]
+ * 액세스 토큰을 갱신합니다. 동시 호출은 하나의 갱신으로 합칩니다.
+ * @param {{ interactive?: boolean }} [options]
+ * @returns {Promise<string>} access token
  */
-export function signIn(options = {}) {
-  const forceConsent = Boolean(options.forceConsent);
-  return new Promise((resolve, reject) => {
+export function refreshAccessToken(options = {}) {
+  const interactive = Boolean(options.interactive);
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = new Promise((resolve, reject) => {
     if (!tokenClient) {
       reject(new Error('Google 인증이 초기화되지 않았습니다.'));
       return;
     }
+
     tokenClient.callback = (response) => {
       if (response.error) {
         reject(new Error(response.error_description || response.error));
         return;
       }
       accessToken = response.access_token;
-      // scope가 비어 있으면 GIS가 생략한 경우일 수 있어 API로 검증한다
-      grantedScope = response.scope || '';
+      // GIS가 scope를 생략하면 기존 부여 범위를 유지
+      if (response.scope) {
+        grantedScope = response.scope;
+      }
       if (grantedScope && !hasCalendarScope(grantedScope)) {
         accessToken = null;
         grantedScope = '';
         reject(createScopeError());
         return;
       }
-      resolve();
+      resolve(accessToken);
     };
-    tokenClient.requestAccessToken({
-      prompt: forceConsent ? 'consent' : '',
-    });
+
+    try {
+      tokenClient.requestAccessToken({
+        prompt: interactive ? 'consent' : '',
+      });
+    } catch (err) {
+      reject(err);
+    }
+  }).finally(() => {
+    refreshInFlight = null;
   });
+
+  return refreshInFlight;
+}
+
+/**
+ * @param {{ forceConsent?: boolean }} [options]
+ */
+export function signIn(options = {}) {
+  return refreshAccessToken({
+    interactive: Boolean(options.forceConsent),
+  }).then(() => undefined);
 }
 
 /** 기존 토큰을 폐기하고 캘린더 포함 동의를 다시 받습니다. */
@@ -313,7 +340,11 @@ export async function resignInWithCalendarConsent() {
 
 export function signOut() {
   if (accessToken && window.google?.accounts?.oauth2) {
-    window.google.accounts.oauth2.revoke(accessToken);
+    try {
+      window.google.accounts.oauth2.revoke(accessToken);
+    } catch {
+      // ignore
+    }
   }
   accessToken = null;
   grantedScope = '';
@@ -336,9 +367,10 @@ export async function apiFetch(url, options = {}, retryCount = 0) {
   }
 
   const { responseType, ...fetchOptions } = options;
+  const tokenUsed = accessToken;
 
   const headers = {
-    Authorization: `Bearer ${accessToken}`,
+    Authorization: `Bearer ${tokenUsed}`,
     ...fetchOptions.headers,
   };
   if (fetchOptions.body != null && headers['Content-Type'] == null) {
@@ -357,9 +389,25 @@ export async function apiFetch(url, options = {}, retryCount = 0) {
 
   if (!res.ok) {
     if (res.status === 401) {
-      accessToken = null;
-      grantedScope = '';
-      throw createAuthExpiredError();
+      // 만료·일시 401: 즉시 로그아웃하지 않고 조용히 갱신 후 1회 재시도
+      // 병렬 동기화에서 한 건의 401이 세션 전체를 날리는 것을 방지
+      if (retryCount >= 1) {
+        accessToken = null;
+        grantedScope = '';
+        throw createAuthExpiredError();
+      }
+      try {
+        // 이미 다른 요청이 새 토큰을 받았으면 그대로 재시도
+        if (accessToken && accessToken !== tokenUsed) {
+          return apiFetch(url, options, retryCount + 1);
+        }
+        await refreshAccessToken({ interactive: false });
+      } catch {
+        accessToken = null;
+        grantedScope = '';
+        throw createAuthExpiredError();
+      }
+      return apiFetch(url, options, retryCount + 1);
     }
     const err = await res.json().catch(() => ({}));
     const message = err.error?.message || `API 오류 (${res.status})`;

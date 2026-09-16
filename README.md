@@ -11,7 +11,7 @@ Timebox3와는 **별도 저장소·별도 localStorage·별도 Docs 문서**를 
 - **타임박스** — 05:00~24:00, 30분 단위
 - **Brain Dump** — 자유 메모
 - **로컬 저장** — `timebox4_` prefix localStorage
-- **기기 동기화** — Google Drive `TimeBox4 Planner/sync/` JSON (자동 디바운스 + 「동기화」 버튼). 날짜 단위 LWW
+- **기기 동기화** — Google Drive `TimeBox4 Planner/sync/` JSON. **로그인 직후 1회 자동** + 헤더 **「동기화」** 수동. 날짜 단위 LWW
 - **Google Docs** — `TimeBox4 Planner Journal` 단일 문서에 날짜 섹션 저장
 - **Google Calendar**
   - **불러오기**: timed 일정은 빈 슬롯에만 채움, **종일 일정은 할 일 목록에 추가** (Money·Privacy 등 **쓰기 가능한 내 캘린더 전체**, 기존 입력 유지, timebox4 소유 이벤트 제외)
@@ -75,10 +75,11 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 | 항목 | 내용 |
 |------|------|
 | 저장 위치 | Drive `TimeBox4 Planner/sync/` (`manifest.json`, `recurring.json`, `days/YYYY-MM-DD.json`) |
-| 자동 | 입력 후 약 2.5초, 날짜 전환, 탭 재표시, 온라인 복귀 시 |
-| 수동 | 헤더 **동기화** 버튼 (지금 맞추기 / 실패 후 재시도) |
+| 자동 | Google **로그인 직후 1회**만 (다른 기기 변경분 받기) |
+| 수동 | 헤더 **동기화** 버튼 — 입력·날짜 변경 후 클라우드에 맞출 때 |
 | 충돌 | 날짜·반복할일 단위로 `updatedAt`이 더 최신인 쪽이 채택 (LWW) |
-| 성능 | manifest 1회 읽기/쓰기, 동일 시각이면 날짜 파일 생략, 날짜 병렬 처리, fileId 캐시 신뢰, 자동은 push-prefer |
+| pending | 로컬에서 수정했지만 아직 Drive에 반영되지 않은 날짜(또는 반복 할 일). 수동/로그인 동기화 시 함께 올림 |
+| 성능 | manifest 1회 읽기/쓰기, 동일 시각이면 날짜 파일 생략, 날짜 병렬 처리, fileId 캐시 신뢰 |
 
 
 ## 배포
