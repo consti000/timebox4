@@ -164,6 +164,7 @@ async function runDeviceCloudSync({ manual = false, dates = null } = {}) {
       dates: targetDates,
       localByDate,
       includePending: true,
+      mode: manual ? 'full' : 'push-prefer',
     });
 
     const refreshed = loadDayData(currentDate);

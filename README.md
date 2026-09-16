@@ -78,6 +78,7 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 | 자동 | 입력 후 약 2.5초, 날짜 전환, 탭 재표시, 온라인 복귀 시 |
 | 수동 | 헤더 **동기화** 버튼 (지금 맞추기 / 실패 후 재시도) |
 | 충돌 | 날짜·반복할일 단위로 `updatedAt`이 더 최신인 쪽이 채택 (LWW) |
+| 성능 | manifest 1회 읽기/쓰기, 동일 시각이면 날짜 파일 생략, 날짜 병렬 처리, fileId 캐시 신뢰, 자동은 push-prefer |
 
 
 ## 배포
