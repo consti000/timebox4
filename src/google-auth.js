@@ -269,14 +269,19 @@ export function initGoogleAuth(onSuccess, onError) {
 
 /**
  * 액세스 토큰을 갱신합니다. 동시 호출은 하나의 갱신으로 합칩니다.
- * GIS가 콜백을 안 주는 경우(로그인 직후 재요청 등)에 대비해 타임아웃을 둡니다.
+ * - 조용한 갱신: 짧은 타임아웃 (콜백 미수신으로 UI가 멈추는 것 방지)
+ * - 로그인/동의(interactive): 타임아웃 없음 (모바일에서 계정 선택에 수십 초 걸릴 수 있음)
  * @param {{ interactive?: boolean, timeoutMs?: number }} [options]
  * @returns {Promise<string>} access token
  */
 export function refreshAccessToken(options = {}) {
   const interactive = Boolean(options.interactive);
   const timeoutMs =
-    typeof options.timeoutMs === 'number' ? options.timeoutMs : 12000;
+    typeof options.timeoutMs === 'number'
+      ? options.timeoutMs
+      : interactive
+        ? 0
+        : 12000;
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = new Promise((resolve, reject) => {
@@ -286,39 +291,53 @@ export function refreshAccessToken(options = {}) {
     }
 
     let settled = false;
+    let timer = null;
+
     const finish = (fn) => (value) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer != null) clearTimeout(timer);
       fn(value);
     };
 
-    const timer = setTimeout(() => {
-      finish(reject)(
-        new Error(
-          'Google 토큰 갱신 시간이 초과되었습니다. 다시 로그인해 주세요.'
-        )
-      );
-    }, timeoutMs);
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        finish(reject)(
+          new Error(
+            'Google 토큰 갱신 시간이 초과되었습니다. 다시 시도해 주세요.'
+          )
+        );
+      }, timeoutMs);
+    }
 
     tokenClient.callback = (response) => {
       if (response.error) {
+        // 타임아웃 이후 늦은 에러는 무시
+        if (settled) return;
         finish(reject)(
           new Error(response.error_description || response.error)
         );
         return;
       }
-      accessToken = response.access_token;
-      // GIS가 scope를 생략하면 기존 부여 범위를 유지
+
+      const nextToken = response.access_token;
+      let nextScope = grantedScope;
       if (response.scope) {
-        grantedScope = response.scope;
+        nextScope = response.scope;
       }
-      if (grantedScope && !hasCalendarScope(grantedScope)) {
+      if (nextScope && !hasCalendarScope(nextScope)) {
+        if (settled) return;
         accessToken = null;
         grantedScope = '';
         finish(reject)(createScopeError());
         return;
       }
+
+      // 성공 토큰은 settled 여부와 관계없이 반영 (타임아웃 후 늦은 성공 복구)
+      accessToken = nextToken;
+      grantedScope = nextScope || grantedScope || '';
+
+      if (settled) return;
       finish(resolve)(accessToken);
     };
 
@@ -340,8 +359,11 @@ export function refreshAccessToken(options = {}) {
  * @param {{ forceConsent?: boolean }} [options]
  */
 export function signIn(options = {}) {
+  const forceConsent = Boolean(options.forceConsent);
+  // 로그인 버튼은 항상 interactive로 두어 모바일 동의 UI에 타임아웃이 걸리지 않게 함
   return refreshAccessToken({
-    interactive: Boolean(options.forceConsent),
+    interactive: forceConsent || !accessToken,
+    timeoutMs: forceConsent || !accessToken ? 0 : 12000,
   }).then(() => undefined);
 }
 
