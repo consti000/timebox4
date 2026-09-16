@@ -100,6 +100,126 @@ export function isDayDataBlank(data) {
   return noPriorities && noBrain && noTimeline && noMemo && noSkipped;
 }
 
+function pickNonEmptyText(a, b, preferA) {
+  const ta = typeof a === 'string' ? a.trim() : '';
+  const tb = typeof b === 'string' ? b.trim() : '';
+  if (ta && tb) return preferA ? a : b;
+  if (ta) return a;
+  if (tb) return b;
+  return '';
+}
+
+/**
+ * 기기 간 날짜 데이터 병합.
+ * 타임라인은 슬롯 단위로 합치고, 양쪽 모두 값이 있으면 더 최신 쪽을 택합니다.
+ * (날짜 전체 LWW는 한쪽 슬롯 입력이 다른 기기 내용을 통째로 지우는 문제가 있음)
+ */
+export function mergeDayData(localRaw, remoteRaw) {
+  const local = normalizeDayData(localRaw);
+  const remote = normalizeDayData(remoteRaw);
+  const cmp = (Date.parse(local.updatedAt) || 0) - (Date.parse(remote.updatedAt) || 0);
+  const preferLocal = cmp >= 0;
+
+  const priorities = [0, 1, 2].map((i) => ({
+    text: pickNonEmptyText(
+      local.priorities[i]?.text,
+      remote.priorities[i]?.text,
+      preferLocal
+    ),
+  }));
+
+  const brainByKey = new Map();
+  const rememberBrain = (item, fromLocal) => {
+    const key =
+      item.recurringId != null && item.recurringId !== ''
+        ? `r:${item.recurringId}`
+        : `t:${String(item.text).trim().toLowerCase()}`;
+    const prev = brainByKey.get(key);
+    if (!prev) {
+      brainByKey.set(key, { ...item, done: Boolean(item.done) });
+      return;
+    }
+    const takeIncoming = preferLocal ? fromLocal : !fromLocal;
+    brainByKey.set(key, {
+      ...prev,
+      ...item,
+      done: takeIncoming
+        ? Boolean(item.done) || Boolean(prev.done)
+        : Boolean(prev.done) || Boolean(item.done),
+      text: takeIncoming ? item.text : prev.text,
+    });
+  };
+  remote.brainDump.forEach((item) => rememberBrain(item, false));
+  local.brainDump.forEach((item) => rememberBrain(item, true));
+
+  const timeline = {};
+  const slotKeys = new Set([
+    ...Object.keys(local.timeline),
+    ...Object.keys(remote.timeline),
+  ]);
+  for (const key of slotKeys) {
+    const value = pickNonEmptyText(
+      local.timeline[key],
+      remote.timeline[key],
+      preferLocal
+    );
+    if (value) timeline[key] = value;
+  }
+
+  const skipped = [
+    ...new Set([
+      ...local.skippedRecurringIds,
+      ...remote.skippedRecurringIds,
+    ]),
+  ];
+
+  const memo = pickNonEmptyText(local.memo, remote.memo, preferLocal);
+
+  const localMs = Date.parse(local.updatedAt) || 0;
+  const remoteMs = Date.parse(remote.updatedAt) || 0;
+  const mergedAt =
+    localMs >= remoteMs ? local.updatedAt : remote.updatedAt;
+
+  return normalizeDayData({
+    priorities,
+    brainDump: [...brainByKey.values()],
+    skippedRecurringIds: skipped,
+    timeline,
+    memo,
+    updatedAt: mergedAt,
+  });
+}
+
+/** updatedAt 제외한 본문 동일 여부 */
+export function dayDataContentEqual(aRaw, bRaw) {
+  const canon = (raw) => {
+    const d = normalizeDayData(raw);
+    const timeline = {};
+    for (const key of Object.keys(d.timeline).sort()) {
+      timeline[key] = d.timeline[key];
+    }
+    const brainDump = [...d.brainDump]
+      .map((item) => ({
+        text: item.text,
+        done: Boolean(item.done),
+        recurringId: item.recurringId ?? null,
+      }))
+      .sort((x, y) => {
+        const kx = `${x.recurringId ?? ''}|${x.text}`;
+        const ky = `${y.recurringId ?? ''}|${y.text}`;
+        return kx.localeCompare(ky);
+      });
+    return {
+      priorities: d.priorities.map((p) => ({ text: p.text })),
+      brainDump,
+      skippedRecurringIds: [...d.skippedRecurringIds].map(String).sort(),
+      timeline,
+      memo: d.memo,
+    };
+  };
+  return JSON.stringify(canon(aRaw)) === JSON.stringify(canon(bRaw));
+}
+
 export function normalizeDayData(raw) {
   const empty = createEmptyDayData();
   if (!raw || typeof raw !== 'object') return empty;

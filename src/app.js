@@ -190,13 +190,10 @@ async function runDeviceCloudSync({
     });
 
     const refreshed = loadDayData(currentDate);
-    const changed =
-      refreshed.updatedAt !== dayData.updatedAt ||
-      JSON.stringify(refreshed) !== JSON.stringify(normalizeForCompare(dayData));
     dayData = refreshed;
-    if (changed || summary.pulled > 0) {
-      renderAll();
-    }
+    dayDirty = false;
+    // 병합 pull은 updatedAt만 같고 슬롯이 늘어날 수 있어 항상 다시 그림
+    renderAll();
 
     const label = `동기화됨 ${formatSyncClock()}`;
     setSaveIndicator('synced', label);
@@ -235,11 +232,6 @@ async function runDeviceCloudSync({
 
 function persistLocalQuiet() {
   flushDayBeforeSync();
-}
-
-function normalizeForCompare(data) {
-  const copy = { ...data };
-  return copy;
 }
 
 function handleAuthExpired() {
