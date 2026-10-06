@@ -100,6 +100,18 @@ export function isDayDataBlank(data) {
   return noPriorities && noBrain && noTimeline && noMemo && noSkipped;
 }
 
+/** 그 날짜에 직접 적어 둔 내용이 있는지. 반복 할 일 표시만으로는 해당하지 않습니다. */
+export function hasWrittenDayContent(data) {
+  const d = normalizeDayData(data);
+  const hasPriority = d.priorities.some((p) => String(p.text || '').trim());
+  const hasTodo = d.brainDump.some((item) => String(item.text || '').trim());
+  const hasTimeline = Object.values(d.timeline).some((value) =>
+    String(value || '').trim()
+  );
+  const hasMemo = Boolean(String(d.memo || '').trim());
+  return hasPriority || hasTodo || hasTimeline || hasMemo;
+}
+
 function pickNonEmptyText(a, b, preferA) {
   const ta = typeof a === 'string' ? a.trim() : '';
   const tb = typeof b === 'string' ? b.trim() : '';

@@ -11,6 +11,7 @@ import {
   removeRecurringTodo,
   mergeTodosForDate,
   formatRepeatRange,
+  hasWrittenDayContent,
 } from './utils.js';
 import {
   isGoogleConfigured,
@@ -111,6 +112,7 @@ function updateDayData(mutator) {
   mutator(dayData);
   dayDirty = true;
   debouncedPersist();
+  syncDateChipMark(currentDate);
 }
 
 /**
@@ -681,6 +683,20 @@ function parseLocalDate(iso) {
   return new Date(y, m - 1, d);
 }
 
+function dateChipLabel(iso, hasEntry) {
+  const label = formatDateDisplay(iso);
+  return hasEntry ? `${label}, 기록 있음` : label;
+}
+
+function syncDateChipMark(iso) {
+  const btn = els.dateStrip?.querySelector(`[data-date="${iso}"]`);
+  if (!btn) return;
+  const data = iso === currentDate ? dayData : loadDayData(iso);
+  const hasEntry = hasWrittenDayContent(data);
+  btn.classList.toggle('has-entry', hasEntry);
+  btn.setAttribute('aria-label', dateChipLabel(iso, hasEntry));
+}
+
 function renderDateStrip() {
   const today = todayISO();
   const dates = dateWindowAround(currentDate, DATE_STRIP_RADIUS);
@@ -689,12 +705,16 @@ function renderDateStrip() {
 
   dates.forEach((iso) => {
     const date = parseLocalDate(iso);
+    const data = iso === currentDate ? dayData : loadDayData(iso);
+    const hasEntry = hasWrittenDayContent(data);
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'date-chip';
+    btn.dataset.date = iso;
     if (iso === today) btn.classList.add('is-today');
     if (iso === currentDate) btn.classList.add('is-selected');
-    btn.setAttribute('aria-label', formatDateDisplay(iso));
+    if (hasEntry) btn.classList.add('has-entry');
+    btn.setAttribute('aria-label', dateChipLabel(iso, hasEntry));
     if (iso === currentDate) btn.setAttribute('aria-current', 'date');
 
     const weekday = document.createElement('span');
@@ -705,7 +725,11 @@ function renderDateStrip() {
     day.className = 'date-chip-day';
     day.textContent = String(date.getDate());
 
-    btn.append(weekday, day);
+    const dot = document.createElement('span');
+    dot.className = 'date-chip-dot';
+    dot.setAttribute('aria-hidden', 'true');
+
+    btn.append(weekday, day, dot);
     btn.addEventListener('click', () => {
       if (iso !== currentDate) switchDate(iso);
     });
