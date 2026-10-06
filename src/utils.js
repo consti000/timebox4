@@ -389,6 +389,37 @@ export function saveRecurringTodosLocal(items) {
   return normalized;
 }
 
+function recurringSignature(item) {
+  return `${item.text.toLowerCase()}|${item.startDate}|${item.endDate}`;
+}
+
+/**
+ * 반복 할 일을 id·문구+기간 기준으로 합칩니다.
+ * 이미 있는 항목은 바꾸지 않고, 파일에만 있는 항목만 추가합니다.
+ */
+export function mergeRecurringTodos(incomingItems) {
+  const local = loadRecurringTodos();
+  const incoming = (Array.isArray(incomingItems) ? incomingItems : [])
+    .map(normalizeRecurringTodo)
+    .filter(Boolean);
+  const ids = new Set(local.map((item) => String(item.id)));
+  const signatures = new Set(local.map(recurringSignature));
+  const merged = [...local];
+  let added = 0;
+
+  for (const item of incoming) {
+    const signature = recurringSignature(item);
+    if (ids.has(String(item.id)) || signatures.has(signature)) continue;
+    merged.push(item);
+    ids.add(String(item.id));
+    signatures.add(signature);
+    added += 1;
+  }
+
+  if (added > 0) saveRecurringTodosLocal(merged);
+  return { added, total: merged.length };
+}
+
 export function addRecurringTodo({ text, startDate, endDate }) {
   const next = normalizeRecurringTodo({
     id: Date.now() + Math.random(),

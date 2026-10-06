@@ -37,6 +37,12 @@ import {
   queueDayForSync,
   queueRecurringForSync,
 } from './google-sync.js';
+import {
+  buildLocalBackup,
+  backupFilename,
+  parseLocalBackup,
+  mergeLocalBackup,
+} from './local-backup.js';
 
 const TIME_SLOTS = generateTimeSlots(5, 24);
 const DATE_STRIP_RADIUS = 4;
@@ -956,6 +962,61 @@ function bindEvents() {
       showToast(result.message || '캘린더 보내기에 실패했습니다.', 'error');
     }
   });
+
+  els.backupExportBtn.addEventListener('click', () => {
+    flushDayBeforeSync();
+    const payload = buildLocalBackup();
+    const dayCount = Object.keys(payload.days).length;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = backupFilename(payload);
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast(
+      `로컬 기록을 내보냈습니다. (날짜 ${dayCount}일, 반복 ${payload.recurring.length}개)`,
+      'success'
+    );
+  });
+
+  els.backupImportBtn.addEventListener('click', () => {
+    els.backupImportInput.value = '';
+    els.backupImportInput.click();
+  });
+
+  els.backupImportInput.addEventListener('change', async () => {
+    const file = els.backupImportInput.files?.[0];
+    if (!file) return;
+    try {
+      const payload = parseLocalBackup(await file.text());
+      const dayCount = Object.keys(payload.days).length;
+      const recurringCount = Array.isArray(payload.recurring)
+        ? payload.recurring.length
+        : 0;
+      const confirmed = window.confirm(
+        `날짜 ${dayCount}일, 반복 할 일 ${recurringCount}개를 이 기기의 기록과 합칩니다.\n같은 칸에 둘 다 내용이 있으면 더 최신 쪽을 유지하고, 비어 있는 칸은 채웁니다.`
+      );
+      if (!confirmed) return;
+
+      flushDayBeforeSync();
+      const result = mergeLocalBackup(payload);
+      for (const dateISO of result.changedDates) queueDayForSync(dateISO);
+      if (result.recurringAdded > 0) queueRecurringForSync();
+
+      dayData = loadDayData(currentDate);
+      dayDirty = false;
+      renderAll();
+      showToast(
+        `가져오기를 합쳤습니다. (날짜 ${result.daysMerged}일, 반복 ${result.recurringAdded}개)`,
+        'success'
+      );
+    } catch (err) {
+      showToast(err.message || '가져오기에 실패했습니다.', 'error');
+    }
+  });
 }
 
 export function initApp() {
@@ -982,6 +1043,9 @@ export function initApp() {
   els.cloudSyncBtn = $('cloud-sync-btn');
   els.calendarPullBtn = $('calendar-pull-btn');
   els.calendarPushBtn = $('calendar-push-btn');
+  els.backupExportBtn = $('backup-export-btn');
+  els.backupImportBtn = $('backup-import-btn');
+  els.backupImportInput = $('backup-import-input');
   els.toast = $('toast');
 
   dayData = loadDayData(currentDate);
